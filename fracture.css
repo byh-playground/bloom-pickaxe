@@ -355,3 +355,18 @@ button:disabled {
         display: none;
     }
 }
+.render-metrics {
+    position: fixed;
+    z-index: 5;
+    left: max(8px, env(safe-area-inset-left));
+    top: calc(max(8px, env(safe-area-inset-top)) + 86px);
+    margin: 0;
+    padding: 7px 9px;
+    border-radius: 6px;
+    background: #152c24e8;
+    color: #e8f5df;
+    font:
+        11px/1.5 ui-monospace,
+        monospace;
+    pointer-events: none;
+}

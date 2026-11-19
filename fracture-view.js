@@ -211,11 +211,24 @@ export function createFractureView(canvas, touchControls) {
     const faceMemory = new WeakMap();
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     let layout = null;
-    function measure(state) {
+    let viewport = null;
+    let viewportDirty = true;
+    const backingScales = [1, 0.85, 0.72];
+    let qualityLevel = 0;
+    let slowFrames = 0;
+    let steadyFrames = 0;
+    let lastDrawAt;
+    let nextQualityChange = 0;
+    const invalidateViewport = () => (viewportDirty = true);
+    const resizeObserver = new ResizeObserver(invalidateViewport);
+    resizeObserver.observe(canvas);
+    if (touchControls) resizeObserver.observe(touchControls);
+    window.addEventListener('resize', invalidateViewport);
+
+    function measureViewport(dpr) {
         const b = canvas.getBoundingClientRect();
         const w = Math.max(1, b.width),
             h = Math.max(1, b.height);
-        const dpr = Math.min(2, devicePixelRatio || 1);
         if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
             canvas.width = Math.round(w * dpr);
             canvas.height = Math.round(h * dpr);
@@ -228,23 +241,47 @@ export function createFractureView(canvas, touchControls) {
         const bottom = controls?.height && h > w ? b.bottom - controls.top + 8 : w < 540 ? 164 : 90;
         const availableH = Math.max(160, h - top - bottom);
         const scale = Math.max(0.2, Math.min((w - 24) / worldW, availableH / worldH, 1.35));
+        viewport = { w, h, dpr, turned, worldW, worldH, top, availableH, scale };
+        viewportDirty = false;
+    }
+
+    function measure(state) {
+        const dpr = Math.max(
+            0.75,
+            Math.min(2, devicePixelRatio || 1) * backingScales[qualityLevel],
+        );
+        if (viewportDirty || viewport?.dpr !== dpr) measureViewport(dpr);
+        const { w, turned, worldW, worldH, top, availableH, scale } = viewport;
         const bounds = state.bounds ?? board;
         const cameraX = turned ? state.player.y * tilt : state.player.x;
         const cameraY = turned ? bounds.width - state.player.x : state.player.y * tilt;
         layout = {
-            w,
-            h,
-            dpr,
-            turned,
-            worldW,
-            worldH,
+            ...viewport,
             bounds,
-            scale,
             ox: state.bounds ? w / 2 - cameraX * scale : (w - worldW * scale) / 2,
             oy: state.bounds
                 ? top + availableH / 2 - cameraY * scale
                 : top + (availableH - worldH * scale) / 2,
         };
+    }
+
+    function updateQuality(now) {
+        const elapsed = now - lastDrawAt;
+        lastDrawAt = now;
+        if (!Number.isFinite(elapsed) || elapsed > 100) {
+            slowFrames = 0;
+            steadyFrames = 0;
+            return;
+        }
+        slowFrames = elapsed > 20 ? slowFrames + 1 : Math.max(0, slowFrames - 0.25);
+        steadyFrames = elapsed <= 17.8 ? steadyFrames + 1 : 0;
+        if (now < nextQualityChange) return;
+        if (slowFrames >= 10 && qualityLevel < backingScales.length - 1) qualityLevel++;
+        else if (steadyFrames >= 150 && qualityLevel > 0) qualityLevel--;
+        else return;
+        slowFrames = 0;
+        steadyFrames = 0;
+        nextQualityChange = now + 1500;
     }
     function project(a, z = 0) {
         return layout.turned
@@ -346,6 +383,72 @@ export function createFractureView(canvas, touchControls) {
             }
         }
     }
+    const groundCells = 8;
+    const groundCellSize = 40;
+    const groundTileSpan = groundCells * groundCellSize;
+    const groundMargin = 8;
+    const groundTiles = new Map();
+    let groundTileLayout = '';
+
+    function groundTile(col, row, bounds, density, limit) {
+        const key = col + ':' + row;
+        const cached = groundTiles.get(key);
+        if (cached) {
+            groundTiles.delete(key);
+            groundTiles.set(key, cached);
+            return cached;
+        }
+        const x0 = col * groundTileSpan;
+        const y0 = row * groundTileSpan;
+        const start = layout.turned
+            ? project({ x: x0 + groundTileSpan, y: y0 })
+            : project({ x: x0, y: y0 });
+        const width = (layout.turned ? tilt : 1) * groundTileSpan + groundMargin * 2;
+        const height = (layout.turned ? 1 : tilt) * groundTileSpan + groundMargin * 2;
+        const tile = document.createElement('canvas');
+        tile.width = Math.ceil(width * density);
+        tile.height = Math.ceil(height * density);
+        const tileCtx = tile.getContext('2d');
+        tileCtx.scale(tile.width / width, tile.height / height);
+        tileCtx.lineCap = 'round';
+        tileCtx.lineJoin = 'round';
+        for (let dy = 0; dy < groundCells; dy++) {
+            for (let dx = 0; dx < groundCells; dx++) {
+                const hash = hashPoint((col * groundCells + dx) * 5, (row * groundCells + dy) * 5);
+                const x = x0 + dx * groundCellSize + (hash & 31) + 3;
+                const y = y0 + dy * groundCellSize + ((hash >>> 5) & 31) + 3;
+                if (x > bounds.width || y > bounds.height) continue;
+                const p = project({ x, y });
+                p.x += groundMargin - start.x;
+                p.y += groundMargin - start.y;
+                const kind = (hash >>> 10) % 16;
+                if (kind < 7) {
+                    ellipse(tileCtx, p.x, p.y, 3 + (hash % 3), 1.6, '#55794c3b');
+                } else if (kind < 13) {
+                    line(
+                        tileCtx,
+                        [{ x: p.x - 2, y: p.y - 3 }, p, { x: p.x + 2, y: p.y - 4 }],
+                        '#52764b64',
+                        1.2,
+                    );
+                } else {
+                    ellipse(tileCtx, p.x - 1.6, p.y, 1.7, 1.1, '#f7efc2');
+                    ellipse(tileCtx, p.x + 1.6, p.y - 0.8, 1.7, 1.1, '#f7efc2');
+                }
+            }
+        }
+        const item = {
+            image: tile,
+            x: start.x - groundMargin,
+            y: start.y - groundMargin,
+            width,
+            height,
+        };
+        while (groundTiles.size >= limit) groundTiles.delete(groundTiles.keys().next().value);
+        groundTiles.set(key, item);
+        return item;
+    }
+
     function paintOnlineGround(state) {
         const { w, h, scale, ox, oy, turned, bounds } = layout;
         const u0 = -ox / scale;
@@ -362,7 +465,11 @@ export function createFractureView(canvas, touchControls) {
         grass.addColorStop(0.66, '#a1c077');
         grass.addColorStop(1, '#91b06b');
         ctx.fillStyle = grass;
-        ctx.fillRect(0, 0, width, height);
+        const left = Math.max(0, u0);
+        const top = Math.max(0, v0);
+        const right = Math.min(width, u1);
+        const bottom = Math.min(height, v1);
+        ctx.fillRect(left, top, right - left, bottom - top);
         ctx.strokeStyle = '#5a7e58';
         ctx.lineWidth = 8;
         ctx.strokeRect(0, 0, width, height);
@@ -371,28 +478,25 @@ export function createFractureView(canvas, touchControls) {
         const y0 = Math.max(0, (turned ? u0 : v0) / tilt);
         const x1 = Math.min(bounds.width, turned ? bounds.width - v0 : u1);
         const y1 = Math.min(bounds.height, (turned ? u1 : v1) / tilt);
-        const cell = 40;
-        for (let row = Math.floor(y0 / cell) - 1; row <= Math.floor(y1 / cell) + 1; row++) {
-            for (let col = Math.floor(x0 / cell) - 1; col <= Math.floor(x1 / cell) + 1; col++) {
-                const pattern = hashPoint(col * 5, row * 5);
-                const x = col * cell + (pattern & 31) + 3;
-                const y = row * cell + ((pattern >>> 5) & 31) + 3;
-                if (x < 0 || x > bounds.width || y < 0 || y > bounds.height) continue;
-                const p = project({ x, y });
-                const kind = (pattern >>> 10) % 16;
-                if (kind < 7) {
-                    ellipse(ctx, p.x, p.y, 3 + (pattern % 3), 1.6, '#55794c3b');
-                } else if (kind < 13) {
-                    line(
-                        ctx,
-                        [{ x: p.x - 2, y: p.y - 3 }, p, { x: p.x + 2, y: p.y - 4 }],
-                        '#52764b64',
-                        1.2,
-                    );
-                } else {
-                    ellipse(ctx, p.x - 1.6, p.y, 1.7, 1.1, '#f7efc2');
-                    ellipse(ctx, p.x + 1.6, p.y - 0.8, 1.7, 1.1, '#f7efc2');
-                }
+        const density = Math.max(1, Math.min(2, scale * layout.dpr));
+        const tileLayout = `${turned}:${bounds.width}:${bounds.height}:${density}`;
+        if (tileLayout !== groundTileLayout) {
+            groundTiles.clear();
+            groundTileLayout = tileLayout;
+        }
+        const firstCol = Math.floor(Math.max(0, x0 - groundMargin / tilt) / groundTileSpan);
+        const firstRow = Math.floor(Math.max(0, y0 - groundMargin / tilt) / groundTileSpan);
+        const lastCol = Math.floor(
+            Math.min(bounds.width, x1 + groundMargin / tilt) / groundTileSpan,
+        );
+        const lastRow = Math.floor(
+            Math.min(bounds.height, y1 + groundMargin / tilt) / groundTileSpan,
+        );
+        const limit = Math.max(24, (lastRow - firstRow + 1) * (lastCol - firstCol + 1) + 8);
+        for (let row = firstRow; row <= lastRow; row++) {
+            for (let col = firstCol; col <= lastCol; col++) {
+                const tile = groundTile(col, row, bounds, density, limit);
+                ctx.drawImage(tile.image, tile.x, tile.y, tile.width, tile.height);
             }
         }
     }
@@ -554,10 +658,9 @@ export function createFractureView(canvas, touchControls) {
         return { rim, cap, c, R };
     }
     // 바위마다 고정된 광맥 위치(원래 크기 기준). 잘려 나간 자리의 광맥은 같이 사라진다.
-    const veinCache = new Map();
+    const veinCache = new WeakMap();
     function veinsFor(ore) {
-        const key = ore.id + ':' + ore.r;
-        let v = veinCache.get(key);
+        let v = veinCache.get(ore);
         if (v) return v;
         const rnd = seeded(hashText(ore.id));
         const crystals = Array.from({ length: 7 }, () => {
@@ -595,7 +698,7 @@ export function createFractureView(canvas, touchControls) {
             };
         });
         v = { crystals, streaks, specks };
-        veinCache.set(key, v);
+        veinCache.set(ore, v);
         return v;
     }
     function crystalTuft(x, y, size, tilt, count, pal) {
@@ -736,18 +839,37 @@ export function createFractureView(canvas, touchControls) {
             );
         }
     }
-    function rock(ore, state) {
-        const color = minerals[ore.id];
-        const pal = STONE[ore.id] ?? STONE.plain;
+    const rockDetailCache = new WeakMap();
+    function rockDetail(ore) {
         const local = ore.polygon;
+        const previous = rockDetailCache.get(ore);
+        if (previous?.local === local) return previous;
         const cuts = cutPoints(ore);
         const onCut = (p) =>
             cuts.some((q) => Math.abs(q.x - p.x) < 0.75 && Math.abs(q.y - p.y) < 0.75);
+        const veins = veinsFor(ore);
+        const detail = {
+            local,
+            center: centerOf(local),
+            radius: Math.sqrt(areaOf(local) / Math.PI),
+            cutEdges: local.map((point, i) => onCut(point) && onCut(local[(i + 1) % local.length])),
+            specks: veins.specks.filter((p) => inside(local, p)),
+            crystals: veins.crystals.filter((p) => inside(local, p)),
+            streaks: veins.streaks.map((points) => points.filter((p) => inside(local, p))),
+        };
+        rockDetailCache.set(ore, detail);
+        return detail;
+    }
+
+    function rock(ore, state) {
+        const color = minerals[ore.id];
+        const pal = STONE[ore.id] ?? STONE.plain;
+        const detail = rockDetail(ore);
+        const local = detail.local;
         const age = state.time - (ore.lastHit ?? -Infinity);
         const bodyRecoil = recoil(ore.impact, state.time, 4.8);
         if (!ore.impact && age >= 0 && age < 120)
             bodyRecoil.x = Math.sin(age / 10) * 2 * (1 - age / 120);
-        const veins = veinsFor(ore);
         const cos = Math.cos(ore.angle ?? 0),
             sin = Math.sin(ore.angle ?? 0);
         const toWorld = (v) => ({
@@ -755,7 +877,7 @@ export function createFractureView(canvas, touchControls) {
             y: ore.y + v.x * sin + v.y * cos,
         });
         const points = local.map(toWorld);
-        const R = Math.sqrt(areaOf(local) / Math.PI);
+        const R = detail.radius;
         boulder({
             points,
             heightPoints: local,
@@ -766,10 +888,9 @@ export function createFractureView(canvas, touchControls) {
             palette: pal,
             recoil: bodyRecoil,
             flash: age >= 0 && age < 90 ? (1 - age / 90) ** 2 * 0.4 : 0,
-            isCut: (i) => onCut(local[i]) && onCut(local[(i + 1) % local.length]),
+            isCut: (i) => detail.cutEdges[i],
             details: ({ P, zAt }) => {
-                for (const s of veins.specks) {
-                    if (!inside(local, s)) continue;
+                for (const s of detail.specks) {
                     const w = toWorld(s);
                     const q = P(w, zAt(w));
                     ellipse(
@@ -781,22 +902,19 @@ export function createFractureView(canvas, touchControls) {
                         s.dark ? pal.shade + '99' : pal.cap + 'aa',
                     );
                 }
-                for (const streak of veins.streaks) {
-                    const pts = streak
-                        .filter((p) => inside(local, p))
-                        .map((p) => {
-                            const w = toWorld(p);
-                            return P(w, zAt(w));
-                        });
-                    if (pts.length < 2) continue;
+                for (const streak of detail.streaks) {
+                    if (streak.length < 2) continue;
+                    const pts = streak.map((p) => {
+                        const w = toWorld(p);
+                        return P(w, zAt(w));
+                    });
                     ctx.globalAlpha = 0.5;
                     line(ctx, pts, pal.vein, 2.2);
                     ctx.globalAlpha = 0.45;
                     line(ctx, pts, pal.veinLight, 0.9);
                     ctx.globalAlpha = 1;
                 }
-                for (const cr of veins.crystals) {
-                    if (!inside(local, cr)) continue;
+                for (const cr of detail.crystals) {
                     const w = toWorld(cr);
                     const q = P(w, zAt(w));
                     ellipse(ctx, q.x, q.y + 0.5, 4.5 * cr.s, 2 * cr.s, pal.deep + '88');
@@ -811,7 +929,7 @@ export function createFractureView(canvas, touchControls) {
         });
         const nearby = Math.hypot(state.player.x - ore.x, state.player.y - ore.y) < 140;
         if (!nearby && !ore.boss) return;
-        const badge = project(toWorld(centerOf(local)), Math.min(52, R * 0.47 + 21));
+        const badge = project(toWorld(detail.center), Math.min(52, R * 0.47 + 21));
         label(ctx, ore.boss ? '대광맥' : color.name, badge.x, badge.y, 15, color.light);
         if (nearby && state.level < color.tier)
             label(ctx, pickaxes[color.tier].name + ' 필요', badge.x, badge.y + 17, 11, '#ffedbd');
@@ -1429,7 +1547,24 @@ export function createFractureView(canvas, touchControls) {
         ellipse(ctx, p.x, p.y + 3, spread * 1.1, spread * 0.38, null, '#5d5340');
         ctx.restore();
     }
-    function draw(state) {
+    function isVisible(p, padding) {
+        const { w, h, scale, ox, oy } = layout;
+        const x = p.x * scale + ox;
+        const y = p.y * scale + oy;
+        const margin = padding * scale;
+        return x >= -margin && x <= w + margin && y >= -margin && y <= h + margin;
+    }
+
+    const actors = [];
+    function addActors(items, kind, margin) {
+        for (const item of items) {
+            const p = project(item);
+            if (isVisible(p, margin + (item.z ?? 0))) actors.push({ a: item, kind, p });
+        }
+    }
+
+    function draw(state, now = performance.now()) {
+        updateQuality(now);
         measure(state);
         shakeCamera(state);
         const { w, h, dpr, scale, ox, oy } = layout;
@@ -1452,24 +1587,28 @@ export function createFractureView(canvas, touchControls) {
         ctx.lineWidth = 1.5;
         if (state.bounds) paintOnlineGround(state);
         else basePaint();
-        for (const mark of state.marks) groundPulse(mark, state.time);
-        for (const ore of state.rocks) chargeTell(ore, state.time);
+        for (const mark of state.marks) {
+            if (isVisible(project(mark), 120)) groundPulse(mark, state.time);
+        }
+        for (const ore of state.rocks) {
+            if (ore.chargeDir && isVisible(project(ore), (ore.chargeDistance ?? 115) + ore.r))
+                chargeTell(ore, state.time);
+        }
         targetMarker(state.target, state.level);
-        const actors = [
-            ...state.rocks.map((a) => ({ a, kind: 'rock' })),
-            ...state.obstacles.map((a) => ({ a, kind: 'wall' })),
-            ...state.shards.map((a) => ({ a, kind: 'shard' })),
-            ...(state.others ?? []).map((a) => ({ a, kind: 'other' })),
-            { a: state.player, kind: 'player' },
-        ].sort((a, b) => project(a.a).y - project(b.a).y);
         const playerScreen = project(state.player);
-        for (const { a, kind } of actors) {
+        actors.length = 0;
+        addActors(state.rocks, 'rock', 110);
+        addActors(state.obstacles, 'wall', 110);
+        addActors(state.shards, 'shard', 75);
+        if (state.others) addActors(state.others, 'other', 125);
+        actors.push({ a: state.player, kind: 'player', p: playerScreen });
+        actors.sort((a, b) => a.p.y - b.p.y);
+        for (const { a, kind, p } of actors) {
             if (kind === 'rock') rock(a, state);
             if (kind === 'wall') wall(a);
             if (kind === 'shard') shard(a, state);
             if (kind === 'player') avatar(a, state.level, state.time, state.swing, state.dash);
             if (kind === 'other') {
-                const p = project(a);
                 const lift =
                     Math.abs(p.x - playerScreen.x) < 68 && Math.abs(p.y - playerScreen.y) < 23
                         ? 27
@@ -1486,11 +1625,16 @@ export function createFractureView(canvas, touchControls) {
             }
         }
         trackLandings(state.shards, state.time);
-        for (const l of landings) landing(l, state.time);
-        for (const m of state.marks) effect(m, state.time);
+        for (const l of landings) {
+            if (isVisible(project(l), 120)) landing(l, state.time);
+        }
+        for (const m of state.marks) {
+            if (isVisible(project(m), 160)) effect(m, state.time);
+        }
     }
     return {
         draw,
+        renderScale: () => backingScales[qualityLevel],
         screenAngle(vector) {
             const projected = screenDirection(vector);
             return Math.atan2(projected.y, projected.x);

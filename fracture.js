@@ -1,7 +1,13 @@
 import { createFractureWorld, dashRules, minerals, tickMs, pickaxes } from './fracture-world.js';
 import { createFractureView } from './fracture-view.js';
 import { createStick } from './fracture-stick.js';
-import { createOnlineClient, hasOnlineServer, normalizeServerOrigin } from './online-client.js';
+import {
+    createOnlineClient,
+    createPlayback,
+    hasOnlineServer,
+    normalizeServerOrigin,
+} from './online-client.js';
+import { createRenderMetrics } from './render-metrics.js';
 import { loadGameServer } from './game-server-config.js';
 
 const get = (id) => document.getElementById(id);
@@ -43,6 +49,7 @@ const touchScreen = matchMedia('(pointer: coarse)');
 const view = createFractureView(canvas, touchControls);
 canvas.tabIndex = 0;
 const params = new URLSearchParams(location.search);
+const metrics = params.get('perf') === '1' ? createRenderMetrics() : null;
 const seedParam = params.get('seed');
 const seed =
     seedParam !== null && /^\d+$/.test(seedParam)
@@ -73,13 +80,17 @@ const online = capabilities
           serverOrigin,
           capabilities,
           capabilities.geometry === 1 ? loadRapier() : null,
+          metrics,
       )
     : null;
 const Rapier = !online && !forceOnline ? await loadRapier() : null;
 if (!online && !forceOnline && !Rapier)
     status.textContent = '충돌 모듈을 불러오지 못했어요. 새로고침해 주세요.';
 let world = Rapier ? createFractureWorld(Rapier, seed) : null;
+let offlinePlayback = world ? createPlayback(tickMs) : null;
+if (world) offlinePlayback.push(world.state);
 let lastFrame;
+let lastHudFrame = -Infinity;
 let renderedLevel = -1;
 let carry = 0;
 let sound;
@@ -336,6 +347,8 @@ resetButton.addEventListener('click', () => {
     }
     world.dispose();
     world = createFractureWorld(Rapier, seed);
+    offlinePlayback = createPlayback(tickMs);
+    offlinePlayback.push(world.state);
     carry = 0;
     heard = new WeakSet();
     canvas.focus({ preventScroll: true });
@@ -361,6 +374,8 @@ document.addEventListener('visibilitychange', () => {
 touchScreen.addEventListener('change', resetInputs);
 
 function frame(now) {
+    metrics?.frame(now);
+    const sampleStart = metrics ? performance.now() : 0;
     let state;
     if (online) {
         sendInput(now);
@@ -371,16 +386,27 @@ function frame(now) {
         const axes = getAxes();
         while (carry >= tickMs) {
             world.step({ ...axes, dashIntent: queuedDash });
+            offlinePlayback.push(world.state);
             queuedDash = null;
             carry -= tickMs;
         }
-        state = world.state;
+        state = offlinePlayback.sample(now);
     }
+    if (metrics) metrics.record('sampleMs', performance.now() - sampleStart);
     if (state) {
-        view.draw(state);
+        const drawStart = metrics ? performance.now() : 0;
+        view.draw(state, now);
+        if (metrics) metrics.record('drawMs', performance.now() - drawStart);
+        metrics?.record('renderScale', view.renderScale());
         playSounds(state);
-        refresh(state);
+        if (now - lastHudFrame >= tickMs) {
+            lastHudFrame = now;
+            const hudStart = metrics ? performance.now() : 0;
+            refresh(state);
+            if (metrics) metrics.record('hudMs', performance.now() - hudStart);
+        }
     }
+    metrics?.render(now);
     requestAnimationFrame(frame);
 }
 if (online) online.connect();

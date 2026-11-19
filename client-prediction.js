@@ -103,6 +103,27 @@ export function createDashPrediction(Rapier, serverTickRate = tickRate) {
             : { x: 0, y: 0 };
     }
 
+    function presentationPose(now) {
+        advance(now);
+        const { x, y } = player;
+        const direction = dash.direction;
+        const elapsed = Math.max(0, Math.min(tickMs, Math.min(now, limit) - frameAt));
+        const span = Math.min(elapsed, Math.max(0, dash.until - time - tickMs));
+        if (!direction || span < clockToleranceMs) return { x, y };
+        const distance = (dashRules.distance * span) / dashRules.durationMs;
+        physics.move(player, {
+            x: clamp(x + direction.x * distance, playerBoundary, bounds.width - playerBoundary) - x,
+            y:
+                clamp(y + direction.y * distance, playerBoundary, bounds.height - playerBoundary) -
+                y,
+        });
+        const display = { x: player.x, y: player.y };
+        player.x = x;
+        player.y = y;
+        physics.sync(player);
+        return display;
+    }
+
     return {
         record(seq, input, now) {
             pending.push({ seq, ...input, at: now });
@@ -119,9 +140,9 @@ export function createDashPrediction(Rapier, serverTickRate = tickRate) {
             }
             let previous;
             if (dash) {
-                advance(now);
+                const pose = presentationPose(now);
                 const offset = correctionAt(now);
-                previous = { x: player.x + offset.x, y: player.y + offset.y };
+                previous = { x: pose.x + offset.x, y: pose.y + offset.y };
             }
             let first = 0;
             while (pending[first]?.seq <= ack) acknowledged = pending[first++];
@@ -138,10 +159,10 @@ export function createDashPrediction(Rapier, serverTickRate = tickRate) {
             limit = now + maxLeadMs;
             const replayMs = pending.length ? clamp(now - pending[0].at, 0, maxLeadMs) : 0;
             frameAt = now - replayMs - (pending.length ? tickMs : 0);
-            advance(now);
+            const pose = presentationPose(now);
 
-            const dx = previous ? previous.x - player.x : 0;
-            const dy = previous ? previous.y - player.y : 0;
+            const dx = previous ? previous.x - pose.x : 0;
+            const dy = previous ? previous.y - pose.y : 0;
             const delta = Math.hypot(dx, dy);
             correction =
                 delta > 0.5 && delta < 65 && hurtAt === state.player.hurtAt
@@ -151,11 +172,11 @@ export function createDashPrediction(Rapier, serverTickRate = tickRate) {
         },
         sample(now, displayTime) {
             if (!dash || now - receivedAt > maxLeadMs * 2) return null;
-            advance(now);
+            const pose = presentationPose(now);
             const offset = correctionAt(now);
             return {
-                x: player.x + offset.x,
-                y: player.y + offset.y,
+                x: pose.x + offset.x,
+                y: pose.y + offset.y,
                 faceX: player.faceX,
                 faceY: player.faceY,
                 dash: {

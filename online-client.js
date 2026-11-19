@@ -27,28 +27,128 @@ function makeActors() {
                     sameShape(record[geometryField], raw[geometryField])
                         ? record[geometryField]
                         : raw[geometryField]);
-                const from = old ? { x: record.x, y: record.y, z: record.z } : raw;
                 Object.assign(record, raw);
                 if (geometry) record[geometryField] = geometry;
-                next.set(id, { record, from, to: raw });
+                next.set(id, { record });
             }
             entries = next;
             return Array.from(entries.values(), ({ record }) => record);
-        },
-        sample(ratio) {
-            for (const { record, from, to } of entries.values()) {
-                const jump = Math.hypot(from.x - to.x, from.y - to.y) > 350;
-                const t = jump ? 1 : ratio;
-                record.x = from.x + (to.x - from.x) * t;
-                record.y = from.y + (to.y - from.y) * t;
-                if (Number.isFinite(to.z))
-                    record.z = (from.z ?? to.z) + (to.z - (from.z ?? to.z)) * t;
-            }
         },
         get(id) {
             return entries.get(id)?.record;
         },
     };
+}
+
+const playbackDelayMs = 100;
+const maximumSnapshots = 8;
+const mix = (a, b, weight) => a + (b - a) * weight;
+
+export function createPlayback(delayMs = playbackDelayMs, metrics) {
+    const frames = [];
+    const display = new Map();
+    let time, lastFrameAt, firstFrameAt;
+    let started = false;
+
+    function actors(first, second, weight, prefix, identity, visible) {
+        const models = [];
+        for (const actor of first.values()) {
+            const key = identity(actor);
+            const cacheKey = prefix + key;
+            visible.add(cacheKey);
+            const model = display.get(cacheKey) ?? {};
+            display.set(cacheKey, model);
+            Object.assign(model, actor);
+            const next = second.get(key);
+            if (next && Math.hypot(actor.x - next.x, actor.y - next.y) <= 350) {
+                model.x = mix(actor.x, next.x, weight);
+                model.y = mix(actor.y, next.y, weight);
+                if (Number.isFinite(actor.z) && Number.isFinite(next.z))
+                    model.z = mix(actor.z, next.z, weight);
+            }
+            models.push(model);
+        }
+        return models;
+    }
+    function index(records, identity) {
+        return new Map(records.map((actor) => [identity(actor), { ...actor }]));
+    }
+    const byId = (actor) => actor.id;
+    const byUid = (actor) => actor.uid;
+
+    function push(state) {
+        if (frames.length && state.time <= frames.at(-1).state.time) return;
+        frames.push({
+            state: {
+                ...state,
+                dash: { ...state.dash },
+                bag: { ...state.bag },
+                marks: [...state.marks],
+            },
+            players: index([state.player, ...(state.others ?? [])], byId),
+            rocks: index(state.rocks, byUid),
+            shards: index(state.shards, byId),
+        });
+        if (frames.length > maximumSnapshots) frames.shift();
+    }
+
+    function sample(now) {
+        if (!frames.length) return null;
+        const newest = frames.at(-1).state.time;
+        if (time === undefined) time = frames[0].state.time;
+        firstFrameAt ??= now;
+        started ||= newest - time >= delayMs - 0.001 || now - firstFrameAt >= delayMs * 1.5;
+        const elapsed = lastFrameAt === undefined ? 0 : Math.max(0, now - lastFrameAt);
+        lastFrameAt = now;
+        // A small clock correction absorbs arrival jitter without resetting the lerp at each packet.
+        const lag = newest - time;
+        const pace = Math.min(1.12, Math.max(0.88, 1 + (lag - delayMs) / 400));
+        if (started && frames.length > 1)
+            time = Math.max(frames[0].state.time, Math.min(newest, time + elapsed * pace));
+        if (started) {
+            metrics?.record('bufferMs', newest - time);
+            metrics?.record('bufferEmpty', newest - time <= 0.001 ? 1 : 0);
+        }
+        while (frames.length > 1 && frames[1].state.time <= time) frames.shift();
+        const first = frames[0];
+        const second = frames[1] ?? first;
+        const weight =
+            first === second
+                ? 0
+                : (time - first.state.time) / (second.state.time - first.state.time);
+        const visible = new Set();
+        const [player, ...others] = actors(
+            first.players,
+            second.players,
+            weight,
+            'p:',
+            byId,
+            visible,
+        );
+        const rocks = actors(first.rocks, second.rocks, weight, 'r:', byUid, visible);
+        const shards = actors(first.shards, second.shards, weight, 's:', byId, visible);
+        for (const key of display.keys()) if (!visible.has(key)) display.delete(key);
+        const actorFor = (actor) =>
+            actor?.uid ? display.get('r:' + actor.uid) : display.get('s:' + actor?.id);
+        const remap = (entry, field) => {
+            const actor = actorFor(entry?.[field]);
+            return actor ? { ...entry, [field]: actor } : null;
+        };
+        return {
+            ...first.state,
+            time,
+            player,
+            others,
+            rocks,
+            shards,
+            target: remap(first.state.target, 'actor'),
+            breaking: remap(first.state.breaking, 'target'),
+            breakingOthers: (first.state.breakingOthers ?? [])
+                .map((entry) => remap(entry, 'target'))
+                .filter(Boolean),
+        };
+    }
+    return { push, sample };
 }
 
 export function normalizeServerOrigin(value) {
@@ -84,19 +184,23 @@ export async function hasOnlineServer(origin = location.origin) {
     return null;
 }
 
-export function createOnlineClient(onChange, origin = location.origin, capabilities, engine) {
+export function createOnlineClient(
+    onChange,
+    origin = location.origin,
+    capabilities,
+    engine,
+    metrics,
+) {
     let socket;
     let state = null;
     let seq = 0;
     let channelId = '';
     let playerId = '';
     let phase = 'connecting';
-    let receivedAt = 0;
-    let interval = 0;
-    let previousTime = 0;
-    let clock = 0;
+    let playback;
     let players, rocks, shards, marks;
     let Rapier, prediction;
+    const sentInputs = new Map();
     const info = () => ({ phase, channelId, playerId });
     const notify = () => onChange(info());
 
@@ -104,11 +208,18 @@ export function createOnlineClient(onChange, origin = location.origin, capabilit
         Rapier = module;
     });
 
-    function receive(raw) {
+    function receive(raw, bytes) {
         const now = performance.now();
-        interval = previousTime ? Math.min(100, Math.max(0, raw.time - previousTime)) : 0;
-        receivedAt = now;
-        previousTime = raw.time;
+        if (metrics) {
+            metrics.packet(now, bytes, raw.time);
+            let sent;
+            for (const [key, timestamp] of sentInputs) {
+                if (!Number.isSafeInteger(raw.ackSeq) || key > raw.ackSeq) break;
+                sent = timestamp;
+                sentInputs.delete(key);
+            }
+            if (sent !== undefined) metrics.record('inputAckMs', now - sent);
+        }
 
         const [player, ...others] = players.update(
             [{ ...raw.player, id: playerId }, ...(raw.others ?? [])],
@@ -146,6 +257,7 @@ export function createOnlineClient(onChange, origin = location.origin, capabilit
             prediction ??= createDashPrediction(Rapier, serverTickRate);
             prediction.reconcile(state, now);
         }
+        playback.push(state);
         if (phase !== 'online') {
             phase = 'online';
             notify();
@@ -161,8 +273,8 @@ export function createOnlineClient(onChange, origin = location.origin, capabilit
         playerId = '';
         state = null;
         seq = 0;
-        previousTime = 0;
-        clock = 0;
+        playback = createPlayback(playbackDelayMs, metrics);
+        sentInputs.clear();
         players = makeActors();
         rocks = makeActors();
         shards = makeActors();
@@ -208,7 +320,7 @@ export function createOnlineClient(onChange, origin = location.origin, capabilit
             } else if (packet.type === 'state' && playerId) {
                 clearTimeout(timeout);
                 try {
-                    receive(packet.state);
+                    receive(packet.state, metrics ? new TextEncoder().encode(data).byteLength : 0);
                 } catch {
                     connection.close(1002);
                 }
@@ -222,25 +334,23 @@ export function createOnlineClient(onChange, origin = location.origin, capabilit
         send(input) {
             if (socket?.readyState !== WebSocket.OPEN || phase !== 'online') return false;
             socket.send(JSON.stringify({ type: 'input', seq: ++seq, ...input }));
-            prediction?.record(seq, input, performance.now());
+            const now = performance.now();
+            prediction?.record(seq, input, now);
+            if (metrics && (input.dashIntent || input.attack)) {
+                sentInputs.set(seq, now);
+                if (sentInputs.size > 64) sentInputs.delete(sentInputs.keys().next().value);
+            }
             return true;
         },
         sample(now) {
-            if (!state) return null;
-            const delay = Math.max(0, now - receivedAt);
-            const progress = Math.min(1, delay / (interval || 1));
-            players.sample(progress);
-            rocks.sample(progress);
-            shards.sample(progress);
-            const serverTime = previousTime - interval * (1 - progress);
-            clock = Math.max(clock, serverTime);
-            state.time = clock;
-            const local = prediction?.sample(now, clock);
+            const scene = playback?.sample(now);
+            if (!scene) return null;
+            const local = prediction?.sample(now, scene.time);
             if (local) {
                 const { dash, ...pose } = local;
-                return { ...state, player: { ...state.player, ...pose }, dash };
+                return { ...scene, player: { ...scene.player, ...pose }, dash };
             }
-            return state;
+            return scene;
         },
     };
 }
