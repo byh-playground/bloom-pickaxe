@@ -41,13 +41,18 @@ function makeActors() {
 }
 
 const playbackDelayMs = 100;
-const maximumSnapshots = 8;
+const maximumSnapshots = 12;
+const maximumDelayMs = 320;
+const maxExtrapolationMs = 100;
 const mix = (a, b, weight) => a + (b - a) * weight;
 
 export function createPlayback(delayMs = playbackDelayMs, metrics) {
     const frames = [];
     const display = new Map();
     let time, lastFrameAt, firstFrameAt;
+    let previous, lastArrival, lastSnapshotTime;
+    let targetDelay = delayMs;
+    let network = false;
     let started = false;
 
     function actors(first, second, weight, prefix, identity, visible) {
@@ -64,7 +69,7 @@ export function createPlayback(delayMs = playbackDelayMs, metrics) {
                 model.x = mix(actor.x, next.x, weight);
                 model.y = mix(actor.y, next.y, weight);
                 if (Number.isFinite(actor.z) && Number.isFinite(next.z))
-                    model.z = mix(actor.z, next.z, weight);
+                    model.z = Math.max(0, mix(actor.z, next.z, weight));
             }
             models.push(model);
         }
@@ -76,8 +81,22 @@ export function createPlayback(delayMs = playbackDelayMs, metrics) {
     const byId = (actor) => actor.id;
     const byUid = (actor) => actor.uid;
 
-    function push(state) {
+    function push(state, receivedAt) {
         if (frames.length && state.time <= frames.at(-1).state.time) return;
+        if (Number.isFinite(receivedAt)) {
+            network = true;
+            if (lastArrival !== undefined) {
+                const gap = receivedAt - lastArrival;
+                const step = state.time - lastSnapshotTime;
+                const extra = Math.max(0, gap - step);
+                targetDelay = Math.min(
+                    maximumDelayMs,
+                    Math.max(delayMs, delayMs + extra, targetDelay - Math.min(step, 100) * 0.025),
+                );
+            }
+            lastArrival = receivedAt;
+            lastSnapshotTime = state.time;
+        }
         frames.push({
             state: {
                 ...state,
@@ -89,7 +108,7 @@ export function createPlayback(delayMs = playbackDelayMs, metrics) {
             rocks: index(state.rocks, byUid),
             shards: index(state.shards, byId),
         });
-        if (frames.length > maximumSnapshots) frames.shift();
+        if (frames.length > maximumSnapshots) previous = frames.shift();
     }
 
     function sample(now) {
@@ -97,25 +116,32 @@ export function createPlayback(delayMs = playbackDelayMs, metrics) {
         const newest = frames.at(-1).state.time;
         if (time === undefined) time = frames[0].state.time;
         firstFrameAt ??= now;
-        started ||= newest - time >= delayMs - 0.001 || now - firstFrameAt >= delayMs * 1.5;
+        started ||= newest - time >= targetDelay - 0.001 || now - firstFrameAt >= targetDelay * 1.5;
         const elapsed = lastFrameAt === undefined ? 0 : Math.max(0, now - lastFrameAt);
         lastFrameAt = now;
         // A small clock correction absorbs arrival jitter without resetting the lerp at each packet.
         const lag = newest - time;
-        const pace = Math.min(1.12, Math.max(0.88, 1 + (lag - delayMs) / 400));
-        if (started && frames.length > 1)
-            time = Math.max(frames[0].state.time, Math.min(newest, time + elapsed * pace));
+        const pace = Math.min(1.12, Math.max(0.72, 1 + (lag - targetDelay) / 300));
+        const tail = network && (frames.length > 1 || previous) ? maxExtrapolationMs : 0;
+        const lastTime = time;
+        if (started)
+            time = Math.max(frames[0].state.time, Math.min(newest + tail, time + elapsed * pace));
         if (started) {
-            metrics?.record('bufferMs', newest - time);
+            metrics?.record('bufferMs', Math.max(0, newest - time));
             metrics?.record('bufferEmpty', newest - time <= 0.001 ? 1 : 0);
+            metrics?.record('extrapolateFrame', time > newest ? 1 : 0);
+            metrics?.record('playbackFrozen', elapsed > 0 && time === lastTime ? 1 : 0);
+            metrics?.record('targetBufferMs', targetDelay);
         }
-        while (frames.length > 1 && frames[1].state.time <= time) frames.shift();
+        while (frames.length > 1 && frames[1].state.time <= time) previous = frames.shift();
         const first = frames[0];
-        const second = frames[1] ?? first;
-        const weight =
-            first === second
-                ? 0
-                : (time - first.state.time) / (second.state.time - first.state.time);
+        const overdue = Math.max(0, time - first.state.time);
+        const second = frames[1] ?? (overdue > 0 && previous ? previous : first);
+        const extrapolating = second.state.time < first.state.time;
+        const poseTime = extrapolating
+            ? overdue * (1 - overdue / (2 * maxExtrapolationMs))
+            : overdue;
+        const weight = first === second ? 0 : poseTime / (second.state.time - first.state.time);
         const visible = new Set();
         const [player, ...others] = actors(
             first.players,
@@ -257,7 +283,7 @@ export function createOnlineClient(
             prediction ??= createDashPrediction(Rapier, serverTickRate);
             prediction.reconcile(state, now);
         }
-        playback.push(state);
+        playback.push(state, now);
         if (phase !== 'online') {
             phase = 'online';
             notify();

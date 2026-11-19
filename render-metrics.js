@@ -36,9 +36,12 @@ export function createRenderMetrics() {
 
     function snapshot() {
         const values = (key) => windows.get(key)?.values ?? [];
+        const ratio = (key) => {
+            const list = values(key);
+            return list.length ? list.reduce((sum, n) => sum + n, 0) / list.length : null;
+        };
         const scale = windows.get('renderScale');
         const frame = summary(values('frameMs'));
-        const stalled = values('bufferEmpty');
         return {
             fps: frame ? 1000 / frame.mean : null,
             frame,
@@ -50,9 +53,10 @@ export function createRenderMetrics() {
             serverAdvance: summary(values('serverAdvanceMs')),
             snapshotBytes: summary(values('snapshotBytes')),
             buffer: summary(values('bufferMs')),
-            bufferEmptyRatio: stalled.length
-                ? stalled.reduce((sum, n) => sum + n, 0) / stalled.length
-                : null,
+            bufferEmptyRatio: ratio('bufferEmpty'),
+            extrapolateRatio: ratio('extrapolateFrame'),
+            playbackFrozenRatio: ratio('playbackFrozen'),
+            targetBuffer: summary(values('targetBufferMs')),
             inputAck: summary(values('inputAckMs')),
             longTasks: summary(values('longTaskMs')),
             renderScale: scale
@@ -62,6 +66,7 @@ export function createRenderMetrics() {
     }
 
     const ms = (metric) => (metric ? metric.p95.toFixed(1) + 'ms' : '—');
+    const pct = (value) => (value === null ? '—' : (value * 100).toFixed(1) + '%');
     const observer = globalThis.PerformanceObserver;
     if (observer?.supportedEntryTypes?.includes('longtask')) {
         new observer((list) => {
@@ -95,7 +100,7 @@ export function createRenderMetrics() {
                 `draw ${ms(s.draw)}  ·  sample ${ms(s.sample)}  ·  UI ${ms(s.hud)}`,
                 `snapshot ${ms(s.snapshotGap)}  ·  buffer ${ms(s.buffer)}`,
                 `server step ${s.serverAdvance?.mean.toFixed(1) ?? '—'}ms avg`,
-                `buffer empty ${s.bufferEmptyRatio === null ? '—' : (s.bufferEmptyRatio * 100).toFixed(1) + '%'}  ·  ack ${ms(s.inputAck)}`,
+                `empty ${pct(s.bufferEmptyRatio)}  ·  frozen ${pct(s.playbackFrozenRatio)}  ·  ack ${ms(s.inputAck)}`,
             ].join('\n');
         },
     };

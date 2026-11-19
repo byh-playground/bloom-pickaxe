@@ -207,7 +207,8 @@ function outwardNormal(a, b, c) {
 }
 
 export function createFractureView(canvas, touchControls) {
-    const ctx = canvas.getContext('2d', { alpha: false });
+    const mainContext = canvas.getContext('2d', { alpha: false });
+    let ctx = mainContext;
     const faceMemory = new WeakMap();
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     let layout = null;
@@ -861,6 +862,72 @@ export function createFractureView(canvas, touchControls) {
         return detail;
     }
 
+    const rockBodyCache = new WeakMap();
+    // Rasterize newly visible bodies gradually so entering a crowded area stays responsive.
+    const maxRockBakesPerFrame = 4;
+    let rockBakes = 0;
+
+    function cacheBody(ore, anchor, details, height, options) {
+        const density = Math.max(1, layout.scale * Math.min(2, devicePixelRatio || 1));
+        const angle = ore.angle ?? 0;
+        const cached = rockBodyCache.get(ore);
+        if (
+            cached?.polygon === details.local &&
+            cached.cracks === ore.cracks &&
+            cached.angle === angle &&
+            cached.turned === layout.turned &&
+            cached.density === density
+        )
+            return cached;
+
+        if (rockBakes >= maxRockBakesPerFrame) return null;
+        rockBakes++;
+        const source = options();
+        const pad = ore.r * 1.24 + 13;
+        const width = Math.ceil(pad * 2 * density);
+        const heightPx = Math.ceil((pad * 2 + FACE_Z + height) * density);
+        const image = document.createElement('canvas');
+        image.width = width;
+        image.height = heightPx;
+        const surface = image.getContext('2d');
+        const left = -pad;
+        const top = -pad - FACE_Z - height;
+        surface.setTransform(
+            density,
+            0,
+            0,
+            density,
+            -(anchor.x + left) * density,
+            -(anchor.y + top) * density,
+        );
+        surface.lineCap = 'round';
+        surface.lineJoin = 'round';
+        surface.lineWidth = 1.5;
+        let shape;
+        try {
+            ctx = surface;
+            shape = boulder({ ...source, face: undefined });
+        } finally {
+            ctx = mainContext;
+        }
+        if (!shape) return null;
+        const record = {
+            polygon: details.local,
+            cracks: ore.cracks,
+            angle,
+            turned: layout.turned,
+            density,
+            image,
+            left,
+            top,
+            width: width / density,
+            height: heightPx / density,
+            cap: shape.cap.map((p) => ({ x: p.x - anchor.x, y: p.y - anchor.y })),
+        };
+        rockBodyCache.set(ore, record);
+        return record;
+    }
+
     function rock(ore, state) {
         const color = minerals[ore.id];
         const pal = STONE[ore.id] ?? STONE.plain;
@@ -876,14 +943,14 @@ export function createFractureView(canvas, touchControls) {
             x: ore.x + v.x * cos - v.y * sin,
             y: ore.y + v.x * sin + v.y * cos,
         });
-        const points = local.map(toWorld);
         const R = detail.radius;
-        boulder({
-            points,
+        const H = Math.max(6, Math.min(22, R * 0.27));
+        const options = () => ({
+            points: local.map(toWorld),
             heightPoints: local,
             baseZ: 0,
             rimZ: FACE_Z,
-            H: Math.max(6, Math.min(22, R * 0.27)),
+            H,
             k: rockCapScale,
             palette: pal,
             recoil: bodyRecoil,
@@ -927,9 +994,50 @@ export function createFractureView(canvas, touchControls) {
             },
             face: (surface) => mobFace(ore, state.time, pal, toWorld, surface),
         });
+        const center = toWorld(detail.center);
+        const anchor = project(ore);
+        const active =
+            state.breaking?.target === ore ||
+            state.breakingOthers?.some((entry) => entry.target === ore);
+        const stable = !active && !bodyRecoil.x && !bodyRecoil.y && (age < 0 || age >= 90);
+        const body = stable ? cacheBody(ore, anchor, detail, H, options) : null;
+        if (!body) boulder(options());
+        else {
+            ctx.drawImage(
+                body.image,
+                anchor.x + body.left,
+                anchor.y + body.top,
+                body.width,
+                body.height,
+            );
+            ctx.save();
+            ctx.beginPath();
+            for (let i = 0; i < body.cap.length; i++) {
+                const p = body.cap[i];
+                if (i === 0) ctx.moveTo(anchor.x + p.x, anchor.y + p.y);
+                else ctx.lineTo(anchor.x + p.x, anchor.y + p.y);
+            }
+            ctx.closePath();
+            ctx.clip();
+            mobFace(ore, state.time, pal, toWorld, {
+                P: project,
+                zAt: (p) =>
+                    FACE_Z +
+                    H *
+                        Math.max(
+                            0,
+                            Math.min(
+                                1,
+                                (1 - Math.hypot(p.x - center.x, p.y - center.y) / R) /
+                                    (1 - rockCapScale),
+                            ),
+                        ),
+            });
+            ctx.restore();
+        }
         const nearby = Math.hypot(state.player.x - ore.x, state.player.y - ore.y) < 140;
         if (!nearby && !ore.boss) return;
-        const badge = project(toWorld(detail.center), Math.min(52, R * 0.47 + 21));
+        const badge = project(center, Math.min(52, R * 0.47 + 21));
         label(ctx, ore.boss ? '대광맥' : color.name, badge.x, badge.y, 15, color.light);
         if (nearby && state.level < color.tier)
             label(ctx, pickaxes[color.tier].name + ' 필요', badge.x, badge.y + 17, 11, '#ffedbd');
@@ -1564,6 +1672,7 @@ export function createFractureView(canvas, touchControls) {
     }
 
     function draw(state, now = performance.now()) {
+        rockBakes = 0;
         updateQuality(now);
         measure(state);
         shakeCamera(state);
