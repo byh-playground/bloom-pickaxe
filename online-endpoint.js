@@ -1,1 +1,1 @@
-export const gameServer = "https://bloom-pickaxe.equinox-houseboat.workers.dev";
+export const gameServer = "https://bloom-pickaxe.honey-ampersand.workers.dev";

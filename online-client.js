@@ -137,7 +137,9 @@ export function createOnlineClient(onChange, origin = location.origin, capabilit
             }),
         };
         if (Rapier && Number.isSafeInteger(raw.ackSeq)) {
-            prediction ??= createDashPrediction(Rapier);
+            const reported = capabilities?.tickRate;
+            const serverTickRate = Number.isInteger(reported) && reported > 0 ? reported : 100;
+            prediction ??= createDashPrediction(Rapier, serverTickRate);
             prediction.reconcile(state, now);
         }
         if (phase !== 'online') {

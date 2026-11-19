@@ -12,7 +12,9 @@ import {
 
 export const board = worldSector;
 export const onlineBoard = onlineSize;
-export const tickMs = 10;
+export const tickRate = 30;
+export const tickMs = 1000 / tickRate;
+export const clockToleranceMs = 1e-6;
 const attackReach = 72;
 export const dashRules = { capacity: 3, rechargeMs: 500, durationMs: 200, distance: 78 };
 const playerRadius = 13;
@@ -352,6 +354,7 @@ function breakOversizedChip(piece, remainingCuts = 2) {
 }
 
 export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) {
+    let simulationTick = 0;
     let nextId = 0;
     let eventId = 0;
     const rng = oreRng(seed);
@@ -809,11 +812,11 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
     function stepDash(session, x, y, intent) {
         const { dash, player } = session;
         const { capacity, rechargeMs, durationMs, distance: travel } = dashRules;
-        if (dash.charges < capacity && state.time >= dash.nextChargeAt) {
+        if (dash.charges < capacity && state.time + clockToleranceMs >= dash.nextChargeAt) {
             dash.charges++;
             dash.nextChargeAt = dash.charges < capacity ? dash.nextChargeAt + rechargeMs : 0;
         }
-        if (state.time >= dash.until) {
+        if (state.time + clockToleranceMs >= dash.until) {
             dash.direction = null;
             const direction = x || y ? { x, y } : intent;
             if (dash.charges && direction && state.time - player.hurtAt >= 120) {
@@ -988,7 +991,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
     }
 
     function tick(inputs) {
-        state.time += tickMs;
+        state.time = (++simulationTick * 1000) / tickRate;
         const dt = tickMs / 1000;
         refreshChunks();
         for (const [id, session] of participants) {
@@ -999,7 +1002,10 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
         }
         stepMobs(dt);
         for (const session of participants.values()) {
-            if (session.breaking && state.time - session.breaking.at >= crackGrowthMs) {
+            if (
+                session.breaking &&
+                state.time - session.breaking.at + clockToleranceMs >= crackGrowthMs
+            ) {
                 applyFracture(session, session.breaking);
                 session.breaking = null;
             }

@@ -1,5 +1,5 @@
 import { createFracturePhysics } from './fracture-physics.js';
-import { dashRules, tickMs } from './fracture-world.js';
+import { clockToleranceMs, dashRules, tickRate } from './fracture-world.js';
 
 const maxLeadMs = 120;
 const playerRadius = 13;
@@ -7,7 +7,8 @@ const playerBoundary = 24;
 const correctionMs = 70;
 const clamp = (value, lower, upper) => Math.min(upper, Math.max(lower, value));
 
-export function createDashPrediction(Rapier) {
+export function createDashPrediction(Rapier, serverTickRate = tickRate) {
+    const tickMs = 1000 / serverTickRate;
     const physics = createFracturePhysics(Rapier, true);
     const obstacles = new Map();
     const player = { x: 0, y: 0 };
@@ -49,12 +50,12 @@ export function createDashPrediction(Rapier) {
 
     function step(intent) {
         time += tickMs;
-        if (dash.charges < dashRules.capacity && time >= dash.nextChargeAt) {
+        if (dash.charges < dashRules.capacity && time + clockToleranceMs >= dash.nextChargeAt) {
             dash.charges++;
             dash.nextChargeAt =
                 dash.charges < dashRules.capacity ? dash.nextChargeAt + dashRules.rechargeMs : 0;
         }
-        if (time >= dash.until) {
+        if (time + clockToleranceMs >= dash.until) {
             dash.direction = null;
             const direction = held.x || held.y ? held : intent;
             const length = direction ? Math.hypot(direction.x, direction.y) : 0;
