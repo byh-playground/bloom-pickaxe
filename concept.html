@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ko">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <meta name="theme-color" content="#2f5240" />
+        <title>곡갱이 광맥 목업</title>
+        <link rel="stylesheet" href="./concept.css" />
+        <script type="module" src="./concept.js"></script>
+    </head>
+    <body>
+        <main class="concept" aria-label="열린 광맥 굴리기 비교 목업">
+            <canvas id="world-view" aria-label="열린 광맥 장면"></canvas>
+
+            <header class="place">
+                <span class="place-tag">단일 월드</span>
+                <strong id="region-name">열린 광맥</strong>
+            </header>
+
+            <nav id="region-map" class="region-map" aria-label="100×100 화면 월드 위치">
+                <div class="map-paper" aria-hidden="true">
+                    <i class="map-ring outer"></i>
+                    <i class="map-ring inner"></i>
+                </div>
+                <button
+                    type="button"
+                    class="pin"
+                    data-region="meadow"
+                    aria-label="초원 광맥으로 이동"
+                >
+                    <span>초원</span>
+                </button>
+                <button
+                    type="button"
+                    class="pin"
+                    data-region="crossing"
+                    aria-label="갈림길 광맥으로 이동"
+                >
+                    <span>갈림길</span>
+                </button>
+                <button
+                    type="button"
+                    class="pin boss"
+                    data-region="boss"
+                    aria-label="중앙 보스로 이동"
+                >
+                    <span>보스</span>
+                </button>
+                <small class="map-scale">100 × 100 화면</small>
+            </nav>
+
+            <section class="dock" aria-label="장면 비교">
+                <div class="moment">
+                    <h1 id="moment-title">같은 출발, 한 번의 타격</h1>
+                    <p id="moment-copy">구리를 무리 쪽으로 날립니다.</p>
+                </div>
+
+                <div class="compare" role="group" aria-label="비교할 장면">
+                    <button id="roll" type="button" aria-pressed="true">
+                        <span class="dot mine" aria-hidden="true"></span>그냥 굴리기
+                    </button>
+                    <button id="redirect" type="button" aria-pressed="false">
+                        <span class="dot rival" aria-hidden="true"></span>중간에 받아치기
+                    </button>
+                </div>
+
+                <div class="timeline">
+                    <button id="replay" type="button" aria-label="처음부터 다시 재생">
+                        <span aria-hidden="true">↺</span>
+                    </button>
+                    <input
+                        id="progress"
+                        type="range"
+                        min="0"
+                        max="2700"
+                        step="10"
+                        value="0"
+                        aria-label="장면 시간(ms)"
+                    />
+                </div>
+
+                <p id="outcome" class="outcome" role="status" aria-live="polite"></p>
+            </section>
+        </main>
+    </body>
+</html>

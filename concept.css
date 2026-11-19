@@ -1,0 +1,424 @@
+:root {
+    font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', system-ui, sans-serif;
+    color: #2c3b2c;
+    background: #2f5240;
+    color-scheme: light;
+    --card: #fff7dcf2;
+    --card-edge: #fff8dc;
+    --chip: #f0e6c6;
+    --ink: #2c3b2c;
+    --sub: #5f664d;
+    --mine: #e07a4f;
+    --rival: #6b7fb4;
+    --gold: #f2b93b;
+    --shadow: 0 3px 0 #1d33268a;
+    --safe-top: max(12px, env(safe-area-inset-top));
+    --safe-bottom: max(12px, env(safe-area-inset-bottom));
+    --side: max(12px, env(safe-area-inset-left));
+}
+* {
+    box-sizing: border-box;
+}
+html,
+body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+}
+button,
+input {
+    font: inherit;
+    color: inherit;
+}
+button:focus-visible,
+input:focus-visible {
+    outline: 3px solid #fff3a0;
+    outline-offset: 2px;
+}
+
+.concept {
+    position: relative;
+    width: 100%;
+    height: 100dvh;
+    min-height: 360px;
+    overflow: hidden;
+    background: radial-gradient(ellipse at 50% 42%, #4f7a55 0%, #2f5240 70%, #24412f 100%);
+}
+#world-view {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    touch-action: none;
+}
+
+/* ── 왼쪽 위: 지금 어디인지 ── */
+.place {
+    position: absolute;
+    top: var(--safe-top);
+    left: var(--side);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 14px 5px 5px;
+    border: 1px solid var(--card-edge);
+    border-radius: 999px;
+    background: var(--card);
+    box-shadow: var(--shadow);
+    pointer-events: none;
+}
+.place-tag {
+    padding: 4px 9px;
+    border-radius: 999px;
+    background: #477d67;
+    color: #fffaf0;
+    font-size: 11px;
+    font-weight: 850;
+    white-space: nowrap;
+}
+#region-name {
+    font-size: 15px;
+    font-weight: 900;
+    white-space: nowrap;
+}
+
+/* ── 오른쪽 위: 100×100 월드 지도 ── */
+.region-map {
+    position: absolute;
+    top: var(--safe-top);
+    right: var(--side);
+    width: 148px;
+    padding: 7px 7px 6px;
+    border: 1px solid var(--card-edge);
+    border-radius: 16px;
+    background: var(--card);
+    box-shadow: var(--shadow);
+}
+.map-paper {
+    position: relative;
+    aspect-ratio: 1;
+    border-radius: 10px;
+    background:
+        linear-gradient(#ffffff22 1px, transparent 1px) 0 0 / 10% 10%,
+        linear-gradient(90deg, #ffffff22 1px, transparent 1px) 0 0 / 10% 10%,
+        radial-gradient(circle at 50% 50%, #c9b27e 0 9%, #a9c878 10% 100%);
+    overflow: hidden;
+}
+.map-ring {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    border: 1.5px dashed #6f8b4f88;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+}
+.map-ring.outer {
+    width: 82%;
+    height: 82%;
+}
+.map-ring.inner {
+    width: 46%;
+    height: 46%;
+}
+.pin {
+    position: absolute;
+    /* left/top은 concept.js가 넣는다(지도 안 비율 위치) */
+    width: 30px;
+    height: 30px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    transform: translate(-50%, -50%);
+    cursor: pointer;
+    z-index: 1;
+}
+.pin::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 12px;
+    height: 12px;
+    border: 2px solid #fffaf0;
+    border-radius: 50%;
+    background: #6d8a54;
+    box-shadow: 0 1px 0 #2e452c99;
+    transform: translate(-50%, -50%);
+    transition: transform 140ms;
+}
+.pin.boss::before {
+    border-radius: 3px;
+    background: #c9902f;
+    transform: translate(-50%, -50%) rotate(45deg);
+}
+.pin span {
+    position: absolute;
+    left: 50%;
+    top: calc(50% + 9px);
+    transform: translateX(-50%);
+    padding: 1px 5px;
+    border-radius: 6px;
+    background: #fff7dce6;
+    font-size: 10px;
+    font-weight: 850;
+    white-space: nowrap;
+    color: var(--sub);
+}
+.pin[aria-current='true']::before,
+.pin.active::before {
+    width: 16px;
+    height: 16px;
+    background: var(--mine);
+    box-shadow: 0 0 0 4px #e07a4f44;
+}
+.pin[aria-current='true'] span,
+.pin.active span {
+    background: var(--ink);
+    color: #fffaf0;
+}
+.pin:hover::before {
+    transform: translate(-50%, -50%) scale(1.15);
+}
+.pin.boss:hover::before {
+    transform: translate(-50%, -50%) rotate(45deg) scale(1.15);
+}
+.map-scale {
+    display: block;
+    margin-top: 4px;
+    text-align: center;
+    font-size: 10px;
+    font-weight: 800;
+    color: var(--sub);
+}
+
+/* ── 아래: 설명 한 줄 + 비교 + 시간 ── */
+.dock {
+    position: absolute;
+    left: 50%;
+    bottom: var(--safe-bottom);
+    transform: translateX(-50%);
+    width: min(560px, calc(100% - 24px));
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 10px 12px 10px;
+    border: 1px solid var(--card-edge);
+    border-radius: 18px;
+    background: var(--card);
+    box-shadow: var(--shadow);
+}
+.moment {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+}
+#moment-title {
+    flex: none;
+    margin: 0;
+    font-size: 15px;
+    font-weight: 900;
+    white-space: nowrap;
+}
+#moment-copy {
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
+    font-size: 12.5px;
+    font-weight: 650;
+    color: var(--sub);
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.compare {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    padding: 4px;
+    border-radius: 999px;
+    background: var(--chip);
+}
+.compare button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    height: 38px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    font-size: 14px;
+    font-weight: 850;
+    color: var(--sub);
+    cursor: pointer;
+    transition:
+        background 140ms,
+        color 140ms;
+}
+.compare button[aria-pressed='true'] {
+    background: #fffaf0;
+    color: var(--ink);
+    box-shadow: 0 2px 0 #c9b98a;
+}
+.dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex: none;
+}
+.dot.mine {
+    background: var(--mine);
+}
+.dot.rival {
+    background: var(--rival);
+}
+
+.timeline {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+#replay {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    border: 1px solid #fff0b8;
+    border-radius: 50%;
+    background: #f8d77a;
+    box-shadow: 0 3px 0 #8a6a2a;
+    font-size: 18px;
+    font-weight: 900;
+    color: #4a3a1d;
+    cursor: pointer;
+}
+#replay:active {
+    transform: translateY(2px);
+    box-shadow: 0 1px 0 #8a6a2a;
+}
+#progress {
+    flex: 1;
+    min-width: 0;
+    height: 28px;
+    margin: 0;
+    background: transparent;
+    accent-color: var(--mine);
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+}
+#progress::-webkit-slider-runnable-track {
+    height: 8px;
+    border-radius: 999px;
+    background: #e3d6ae;
+}
+#progress::-moz-range-track {
+    height: 8px;
+    border-radius: 999px;
+    background: #e3d6ae;
+}
+#progress::-moz-range-progress {
+    height: 8px;
+    border-radius: 999px;
+    background: var(--mine);
+}
+#progress::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 22px;
+    height: 22px;
+    margin-top: -7px;
+    border: 3px solid #fffaf0;
+    border-radius: 50%;
+    background: var(--mine);
+    box-shadow: 0 2px 0 #8a4a2a;
+}
+#progress::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border: 3px solid #fffaf0;
+    border-radius: 50%;
+    background: var(--mine);
+}
+
+.outcome {
+    margin: 0;
+    padding: 6px 10px;
+    border-radius: 10px;
+    background: #24402f;
+    color: #fff8e1;
+    font-size: 12.5px;
+    font-weight: 750;
+    line-height: 1.35;
+    text-align: center;
+}
+.outcome:empty {
+    display: none;
+}
+
+/* ── 좁은 화면 ── */
+@media (max-width: 620px) {
+    .region-map {
+        width: 104px;
+        padding: 5px 5px 4px;
+        border-radius: 13px;
+    }
+    .pin span {
+        display: none;
+    }
+    .pin[aria-current='true'] span,
+    .pin.active span {
+        display: block;
+    }
+    .map-scale {
+        font-size: 9px;
+    }
+    .place {
+        max-width: calc(100% - 140px);
+    }
+    #region-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-size: 14px;
+    }
+    .dock {
+        width: calc(100% - 16px);
+        padding: 9px 10px;
+        gap: 7px;
+    }
+    .moment {
+        flex-direction: column;
+        gap: 2px;
+    }
+    #moment-copy {
+        white-space: normal;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+    }
+    .compare button {
+        font-size: 13px;
+        height: 40px;
+    }
+}
+@media (max-height: 520px) {
+    .dock {
+        width: min(720px, calc(100% - 24px));
+        grid-template-columns: auto 1fr;
+        align-items: center;
+    }
+    .moment {
+        display: none;
+    }
+    .outcome {
+        grid-column: 1 / -1;
+    }
+    .region-map {
+        width: 96px;
+    }
+}

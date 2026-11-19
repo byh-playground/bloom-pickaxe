@@ -1,0 +1,262 @@
+:root {
+    font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', system-ui, sans-serif;
+    color: #233d2d;
+    background: #2f5240;
+    color-scheme: light;
+    --card: #fff7dcf2;
+    --card-edge: #fff8dc;
+    --ink: #2c3b2c;
+    --mine: #e07a4f;
+    --rival: #6b7fb4;
+    --chain: #f2b93b;
+    --safe-top: max(10px, env(safe-area-inset-top));
+    --safe-bottom: max(10px, env(safe-area-inset-bottom));
+}
+* {
+    box-sizing: border-box;
+}
+html,
+body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
+}
+button,
+select {
+    font: inherit;
+    color: inherit;
+}
+button:focus-visible,
+select:focus-visible {
+    outline: 3px solid #fff3a0;
+    outline-offset: 2px;
+}
+
+.arena {
+    position: relative;
+    width: 100%;
+    height: 100dvh;
+    min-height: 320px;
+    overflow: hidden;
+    background: radial-gradient(ellipse at 50% 45%, #4f7a55 0%, #2f5240 70%, #24412f 100%);
+}
+#field {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    touch-action: none;
+    cursor: crosshair;
+}
+
+.hud {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+/* 점수판: 가운데 위, 화면을 가리지 않는 얇은 띠 */
+.scoreboard {
+    position: absolute;
+    top: var(--safe-top);
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 6px;
+    padding: 5px;
+    border: 1px solid var(--card-edge);
+    border-radius: 999px;
+    background: var(--card);
+    box-shadow: 0 3px 0 #1d33268a;
+}
+.score {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 72px;
+    height: 34px;
+    padding: 0 12px 0 5px;
+    border-radius: 999px;
+    background: #f0e6c6;
+}
+.score .tag {
+    display: grid;
+    place-items: center;
+    min-width: 26px;
+    height: 24px;
+    padding: 0 6px;
+    border-radius: 999px;
+    color: #fffaf0;
+    font-size: 11px;
+    font-weight: 850;
+    white-space: nowrap;
+}
+.score output {
+    flex: 1;
+    text-align: right;
+    font-size: 19px;
+    font-weight: 900;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+}
+.mine .tag {
+    background: var(--mine);
+}
+.rival .tag {
+    background: var(--rival);
+}
+.chain .tag {
+    background: #b3801c;
+}
+.chain {
+    background: #fbe7a8;
+}
+.score output.bump {
+    animation: bump 260ms ease-out;
+}
+@keyframes bump {
+    30% {
+        transform: scale(1.35);
+    }
+}
+
+/* 알림: 점수판 아래, 짧게 떴다 사라짐 */
+.message {
+    position: absolute;
+    top: calc(var(--safe-top) + 54px);
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: min(86vw, 420px);
+    margin: 0;
+    padding: 7px 14px;
+    border-radius: 12px;
+    background: #24402fe8;
+    color: #fff8e1;
+    font-size: 13px;
+    font-weight: 750;
+    text-align: center;
+    line-height: 1.35;
+    transition: opacity 180ms;
+}
+.message:empty {
+    opacity: 0;
+}
+
+/* 아래 조작 띠 */
+.controls {
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    bottom: var(--safe-bottom);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+.hint {
+    margin: 0;
+    padding: 6px 11px;
+    border-radius: 999px;
+    background: #22392bc9;
+    color: #f4f0d6;
+    font-size: 12px;
+    font-weight: 700;
+}
+.hint-touch {
+    display: none;
+}
+@media (pointer: coarse) {
+    .hint-desktop {
+        display: none;
+    }
+    .hint-touch {
+        display: inline;
+    }
+}
+.tools {
+    display: flex;
+    gap: 6px;
+    pointer-events: auto;
+}
+.delay {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 40px;
+    padding: 0 4px 0 12px;
+    border: 1px solid var(--card-edge);
+    border-radius: 999px;
+    background: var(--card);
+    box-shadow: 0 3px 0 #1d33268a;
+    font-size: 12px;
+    font-weight: 800;
+    color: #5a6248;
+}
+.delay select {
+    height: 32px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 999px;
+    background: #f0e6c6;
+    font-size: 13px;
+    font-weight: 800;
+    color: var(--ink);
+    cursor: pointer;
+}
+#reset {
+    height: 40px;
+    padding: 0 16px;
+    border: 1px solid #fff0b8;
+    border-radius: 999px;
+    background: #f8d77a;
+    box-shadow: 0 3px 0 #8a6a2a;
+    font-size: 14px;
+    font-weight: 900;
+    color: #4a3a1d;
+    cursor: pointer;
+}
+#reset:active {
+    transform: translateY(2px);
+    box-shadow: 0 1px 0 #8a6a2a;
+}
+
+/* 좁은 화면: 조작 띠를 한 줄 버튼만 남기고 힌트는 위로 */
+@media (max-width: 620px) {
+    .score {
+        min-width: 62px;
+        height: 32px;
+        padding-right: 10px;
+    }
+    .score output {
+        font-size: 17px;
+    }
+    .controls {
+        flex-direction: column-reverse;
+        align-items: stretch;
+        gap: 6px;
+    }
+    .hint {
+        align-self: center;
+        font-size: 11px;
+    }
+    .tools {
+        justify-content: center;
+    }
+    .delay {
+        flex: 1;
+        max-width: 280px;
+    }
+    .delay select {
+        flex: 1;
+    }
+}
+@media (max-height: 460px) {
+    .hint {
+        display: none;
+    }
+}

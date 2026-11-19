@@ -1,0 +1,1178 @@
+import { createFracturePhysics } from './fracture-physics.js';
+import {
+    oreRng,
+    oreSlots,
+    oreTier,
+    onlineSize,
+    onlineStarter,
+    sectorSlots,
+    worldCenter,
+    worldSector,
+} from './fracture-spawn.js';
+
+export const board = worldSector;
+export const onlineBoard = onlineSize;
+export const tickMs = 10;
+const attackReach = 72;
+export const dashRules = { capacity: 3, rechargeMs: 500, durationMs: 200, distance: 78 };
+const playerRadius = 13;
+const chipSpanLimit = 52;
+const debrisLifetimeMs = 1200;
+const dropLifetimeMs = 60000;
+const minRockCutArea = 160;
+export const crackGrowthMs = 100;
+const oreTypes = [
+    ['stone', '돌', '#a8aaa2', '#e8e9dc', '#545954', '#97988d'],
+    ['copper', '구리', '#ce8742', '#ffcf76', '#784535', '#9b8e7f'],
+    ['iron', '철', '#8ca3bc', '#d2e5f5', '#455b72', '#78818a'],
+    ['gold', '금', '#eab644', '#fff2a5', '#845e30', '#978062'],
+    ['diamond', '다이아', '#46cbb7', '#c5fff4', '#2b766c', '#74928b'],
+];
+export const minerals = Object.fromEntries(
+    oreTypes.map(([id, name, color, light, dark, shell], tier) => [
+        id,
+        { name, color, light, dark, shell, tier },
+    ]),
+);
+export const pickaxes = [
+    { name: '나무 곡괭이', color: '#b9875f' },
+    ...oreTypes.map(([id, name, color], tier) => ({
+        name: name + ' 곡괭이',
+        color,
+        ore: id,
+        recipe: Object.fromEntries(
+            oreTypes.slice(0, tier + 1).map(([ore], index) => [ore, index === tier ? 50 : 15]),
+        ),
+    })),
+];
+const contours = ['round', 'round', 'ridge', 'spire', 'ridge'];
+const respawnMs = 5500;
+const bossRespawnMs = 24000;
+const warnMs = 480;
+const recoverMs = 650;
+const impactDrag = 7.5;
+const swingWindupMs = 50;
+const attackBufferMs = 100;
+const swingTotalMs = 245;
+const impulseLimit = 390;
+const starter = { x: 221, y: 477 };
+const obstacles = [
+    { x: 462, y: 431, r: 19 },
+    { x: 630, y: 408, r: 18 },
+];
+const outlines = {
+    round: [
+        [-1.05, -0.09],
+        [-0.79, -0.68],
+        [-0.32, -0.91],
+        [0.36, -0.88],
+        [0.72, -0.6],
+        [1.03, -0.22],
+        [0.9, 0.45],
+        [0.48, 0.86],
+        [-0.19, 0.88],
+        [-0.83, 0.59],
+    ],
+    ridge: [
+        [-0.96, -0.12],
+        [-0.72, -0.72],
+        [-0.19, -0.95],
+        [0.41, -0.81],
+        [0.93, -0.65],
+        [0.98, -0.02],
+        [0.63, 0.65],
+        [0.19, 0.91],
+        [-0.44, 0.72],
+        [-0.84, 0.41],
+    ],
+    spire: [
+        [-1.04, -0.17],
+        [-0.66, -0.73],
+        [-0.03, -0.96],
+        [0.52, -0.72],
+        [0.87, -0.36],
+        [1.04, 0.24],
+        [0.61, 0.78],
+        [0.07, 0.88],
+        [-0.56, 0.71],
+        [-0.93, 0.38],
+    ],
+};
+const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
+const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const unit = (x, y) => {
+    const length = Math.hypot(x, y);
+    return length ? { x: x / length, y: y / length } : { x: 1, y: 0 };
+};
+const dot = (a, b) => a.x * b.x + a.y * b.y;
+
+function resetRock(rock) {
+    return {
+        ...rock,
+        polygon: outlines[rock.contour].map(([x, y]) => ({ x: x * rock.r, y: y * rock.r })),
+        seam: [],
+        cracks: [],
+        geometryRevision: 0,
+        lastHit: -Infinity,
+    };
+}
+function centroid(points) {
+    return points.reduce(
+        (p, v) => ({ x: p.x + v.x / points.length, y: p.y + v.y / points.length }),
+        { x: 0, y: 0 },
+    );
+}
+function area(points) {
+    let sum = 0;
+    for (let i = 0; i < points.length; i++) {
+        const a = points[i],
+            b = points[(i + 1) % points.length];
+        sum += a.x * b.y - b.x * a.y;
+    }
+    return Math.abs(sum) / 2;
+}
+
+export function splitPolygon(points, normal, offset) {
+    const base = [],
+        loose = [],
+        seam = [];
+    for (let i = 0; i < points.length; i++) {
+        const a = points[i],
+            b = points[(i + 1) % points.length];
+        const da = dot(a, normal) - offset,
+            db = dot(b, normal) - offset;
+        if (da <= 0) base.push(a);
+        if (da >= 0) loose.push(a);
+        if ((da < 0 && db > 0) || (da > 0 && db < 0)) {
+            const t = da / (da - db);
+            const p = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+            base.push(p);
+            loose.push(p);
+            seam.push(p);
+        }
+    }
+    return { base, loose, seam };
+}
+
+function withFractureEdge(polygon, original, bends) {
+    const [start, end] = original;
+    return polygon.flatMap((point, index) => {
+        const next = polygon[(index + 1) % polygon.length];
+        if (point === start && next === end) return [point, ...bends];
+        if (point === end && next === start) return [point, ...bends.toReversed()];
+        return [point];
+    });
+}
+
+function roughenCut(points, cut, normal, depth) {
+    if (cut.seam.length !== 2) return cut;
+    const [a, b] = cut.seam;
+    const span = distance(a, b);
+    const bend = Math.min(depth, span * 0.12);
+    if (bend < 1) return cut;
+    const samples = [
+        [0.2, -0.45],
+        [0.38, 0.8],
+        [0.55, -0.8],
+        [0.72, 0.65],
+        [0.87, -0.25],
+    ];
+    const bends = samples.map(([t, amplitude]) => ({
+        x: a.x + (b.x - a.x) * t + normal.x * bend * amplitude,
+        y: a.y + (b.y - a.y) * t + normal.y * bend * amplitude,
+    }));
+    const seam = [a, ...bends, b];
+    const fits = seam.slice(0, -1).every((point, index) => {
+        const next = seam[index + 1];
+        return [0.25, 0.5, 0.75].every((t) =>
+            inPolygon(points, {
+                x: point.x + (next.x - point.x) * t,
+                y: point.y + (next.y - point.y) * t,
+            }),
+        );
+    });
+    if (!fits || !bends.every((point) => inPolygon(points, point))) return cut;
+    return {
+        base: withFractureEdge(cut.base, cut.seam, bends),
+        loose: withFractureEdge(cut.loose, cut.seam, bends),
+        seam,
+    };
+}
+
+export function closestOnSegment(p, a, b) {
+    const dx = b.x - a.x,
+        dy = b.y - a.y;
+    const t = clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1), 0, 1);
+    return { x: a.x + dx * t, y: a.y + dy * t };
+}
+
+function closestOnPath(p, points, closed) {
+    let nearest = points[0];
+    for (let i = 1; i < points.length + Number(closed); i++) {
+        const q = closestOnSegment(p, points[i - 1], points[i % points.length]);
+        if (distance(p, q) < distance(p, nearest)) nearest = q;
+    }
+    return nearest;
+}
+
+function rotate({ x, y }, angle) {
+    const cos = Math.cos(angle),
+        sin = Math.sin(angle);
+    return { x: x * cos - y * sin, y: x * sin + y * cos };
+}
+
+function fracturePaths(spot, seam) {
+    if (!seam.length) return [];
+    const join = closestOnPath(spot, seam, false);
+    let i = 1;
+    while (
+        i < seam.length - 1 &&
+        distance(closestOnSegment(join, seam[i - 1], seam[i]), join) > 0.001
+    )
+        i++;
+    return [
+        [spot, join, ...seam.slice(0, i).reverse()],
+        [join, ...seam.slice(i)],
+    ];
+}
+
+function planRock(rock, spot, level) {
+    const whole = rock.polygon;
+    const center = centroid(whole);
+    const edge = closestOnPath(spot, whole, true);
+    const depth = distance(spot, edge);
+    const direction = unit(edge.x - center.x, edge.y - center.y);
+    const size = area(whole);
+    const perimeter = whole.reduce(
+        (sum, p, i) => sum + distance(p, whole[(i + 1) % whole.length]),
+        0,
+    );
+    const fragile = size / perimeter < rock.r * 0.12 || size < rock.r ** 2 * 0.55;
+    const thick = depth > Math.sqrt(size / Math.PI) * 0.46;
+    const nearCrack = rock.cracks.some((crack) => distance(crack.origin, spot) < rock.r * 0.38);
+    if (fragile) {
+        const split = splitChip(whole, direction, rock.r, size * 0.08);
+        return { base: [], parts: split.parts, paths: fracturePaths(spot, split.seam), direction };
+    }
+    if (thick && !nearCrack) {
+        const across = { x: -direction.y, y: direction.x };
+        const paths = [-1, 1].map((side) => [
+            spot,
+            {
+                x: spot.x + direction.x * depth * 0.3 + across.x * side * depth * 0.18,
+                y: spot.y + direction.y * depth * 0.3 + across.y * side * depth * 0.18,
+            },
+            {
+                x: spot.x + direction.x * depth * 0.63 + across.x * side * depth * 0.43,
+                y: spot.y + direction.y * depth * 0.63 + across.y * side * depth * 0.43,
+            },
+        ]);
+        return { paths, direction };
+    }
+
+    // Bisect a point at the exposed edge and one just inboard. Moving the
+    // inboard point changes the depth without scaling the cut with the whole rock.
+    const bite = rock.r * (level ? 0.42 : 0.28) * (nearCrack ? 1.35 : 1);
+    const areaLimit = Math.min(size * 0.38, rock.r ** 2 * (nearCrack ? 0.95 : 0.62));
+    for (const turn of [0, 0.35, -0.35, 0.7, -0.7, Math.PI / 2, -Math.PI / 2]) {
+        const normal = rotate(direction, turn);
+        const exposed = Math.max(...whole.map((p) => dot(p, normal)));
+        for (const width of [1, 0.65, 1.4, 0.35]) {
+            const plane = Math.min(exposed, dot(edge, normal) + bite * 0.35) - bite * width;
+            const cut = splitPolygon(whole, normal, plane);
+            const looseArea = area(cut.loose);
+            if (cut.seam.length !== 2 || looseArea < minRockCutArea || looseArea > areaLimit)
+                continue;
+            const section = roughenCut(whole, cut, normal, bite * 0.27);
+            return { ...section, paths: fracturePaths(spot, section.seam), direction: normal };
+        }
+    }
+
+    for (const turn of [0, 0.35, -0.35, 0.7, -0.7]) {
+        const normal = rotate(direction, turn);
+        const lip = Math.max(...whole.map((p) => dot(p, normal)));
+        for (const width of [0.35, 0.65, 1]) {
+            const cut = splitPolygon(whole, normal, lip - bite * width);
+            const looseArea = area(cut.loose);
+            if (cut.seam.length === 2 && looseArea > 0 && looseArea <= areaLimit) {
+                const section = roughenCut(whole, cut, normal, bite * 0.19);
+                return { ...section, paths: fracturePaths(spot, section.seam), direction: normal };
+            }
+        }
+    }
+    const split = splitChip(whole, direction, rock.r, size * 0.08);
+    return { base: [], parts: split.parts, paths: fracturePaths(spot, split.seam), direction };
+}
+function inPolygon(points, p) {
+    let hit = false;
+    for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+        const a = points[i],
+            b = points[j];
+        if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x)
+            hit = !hit;
+    }
+    return hit;
+}
+
+function splitChip(whole, direction, radius, minArea = 120) {
+    const center = centroid(whole);
+    const angle = Math.atan2(direction.y, direction.x) + Math.PI / 2;
+    for (const turn of [0, 0.32, -0.32, 0.64, -0.64, 1.05, Math.PI / 2]) {
+        const normal = { x: Math.cos(angle + turn), y: Math.sin(angle + turn) };
+        const cut = splitPolygon(whole, normal, dot(center, normal));
+        if (cut.seam.length !== 2) continue;
+        const parts = roughenCut(whole, cut, normal, radius * 0.1);
+        if ([parts.base, parts.loose].every((p) => p.length >= 3 && area(p) >= minArea)) {
+            return { parts: [parts.base, parts.loose], seam: parts.seam };
+        }
+    }
+    return { parts: [whole], seam: [] };
+}
+
+function breakOversizedChip(piece, remainingCuts = 2) {
+    let ends;
+    let maxSpan = chipSpanLimit;
+    for (const a of piece) {
+        for (const b of piece) {
+            const span = distance(a, b);
+            if (span > maxSpan) {
+                maxSpan = span;
+                ends = [a, b];
+            }
+        }
+    }
+    if (!ends || remainingCuts <= 0) return [piece];
+    const [a, b] = ends;
+    const normal = unit(b.x - a.x, b.y - a.y);
+    const middle = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const cut = splitPolygon(piece, normal, dot(middle, normal));
+    if (cut.seam.length !== 2 || area(cut.base) < 35 || area(cut.loose) < 35) return [piece];
+    const parts = roughenCut(piece, cut, normal, 4);
+    return [parts.base, parts.loose].flatMap((part) => breakOversizedChip(part, remainingCuts - 1));
+}
+
+export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) {
+    let nextId = 0;
+    let eventId = 0;
+    const rng = oreRng(seed);
+    const physics = createFracturePhysics(Rapier, online);
+    const keys = Object.keys(minerals);
+    const bounds = online ? onlineBoard : board;
+    const center = online ? worldCenter : { x: bounds.width / 2, y: bounds.height / 2 };
+    const entry = online ? onlineStarter : starter;
+    const state = {
+        time: 0,
+        rocks: [],
+        obstacles: online ? [] : obstacles,
+        shards: [],
+        marks: [],
+    };
+    const participants = new Map();
+    const playerSessions = new Map();
+    const chunks = new Map();
+    const activeChunks = new Set();
+    const liveChunks = new Set();
+    const depleted = [];
+    const wireGeometry = new WeakMap();
+    let neighborhood = '';
+    let slams = 0;
+
+    function addPlayer(id) {
+        const player = {
+            ...entry,
+            faceX: -1,
+            faceY: 0,
+            hp: 4,
+            maxHp: 4,
+            hurtAt: -Infinity,
+        };
+        const session = {
+            id,
+            player,
+            level: 0,
+            dash: { charges: dashRules.capacity, nextChargeAt: 0, until: 0, direction: null },
+            target: null,
+            breaking: null,
+            swing: null,
+            bag: Object.fromEntries(oreTypes.map(([key]) => [key, 0])),
+            stats: { cuts: 0, pickups: 0, upgrades: 0, kills: 0, hitsTaken: 0 },
+            message: '',
+            pending: null,
+            dashing: false,
+        };
+        participants.set(id, session);
+        playerSessions.set(player, session);
+        return session;
+    }
+
+    function blockedSpawn(session, point) {
+        return (
+            Array.from(participants.values()).some(
+                (other) =>
+                    other !== session && distance(other.player, point) < playerRadius * 2 + 12,
+            ) ||
+            state.rocks.some((rock) => distance(rock, point) < rock.r * 1.07 + playerRadius + 5)
+        );
+    }
+    function respawnPoint(session) {
+        if (!online || !blockedSpawn(session, entry)) return entry;
+        for (let ring = 1; ring <= 8; ring++) {
+            for (let i = 0; i < 8 * ring; i++) {
+                const angle = (i * Math.PI) / (4 * ring);
+                const candidate = {
+                    x: entry.x + Math.cos(angle) * ring * 31,
+                    y: entry.y + Math.sin(angle) * ring * 31,
+                };
+                if (!blockedSpawn(session, candidate)) return candidate;
+            }
+        }
+        return entry;
+    }
+
+    for (const obstacle of state.obstacles) physics.add(obstacle, obstacle.r);
+    function spawn(slot) {
+        const random = online ? oreRng(slot.seed + (slot.generation ?? 0)) : rng;
+        if (online) slot.generation = (slot.generation ?? 0) + 1;
+        const tier = oreTier(slot, random);
+        const rock = resetRock({
+            uid: ++nextId,
+            id: keys[tier],
+            x: slot.x + (slot.guaranteed === 0 || slot.boss ? 0 : (random() - 0.5) * 16),
+            y: slot.y + (slot.guaranteed === 0 || slot.boss ? 0 : (random() - 0.5) * 16),
+            r: slot.boss ? 58 : 39 + tier * 2 + random() * 5,
+            contour: contours[tier],
+            heading: random() * Math.PI * 2,
+            stage: 'roam',
+            stageUntil: state.time + 500 + random() * 1400,
+            chargeDir: null,
+            chargeDistance: slot.boss ? 125 : slot.guaranteed === 0 ? 68 : 96,
+            chargeLeft: 0,
+            remainingYield: slot.boss ? 35 : (slot.guaranteed === 0 ? 15 : 12) + tier,
+            boss: Boolean(slot.boss),
+            slot,
+        });
+        if (online) chunks.get(slot.chunk).push(rock);
+        physics.add(rock, rock.r * 1.1);
+        state.rocks.push(rock);
+    }
+    function refreshChunks() {
+        if (!online) return;
+        const sectors = new Set();
+        for (const { player } of participants.values()) {
+            const sx = Math.floor(player.x / worldSector.width);
+            const sy = Math.floor(player.y / worldSector.height);
+            sectors.add(`${sx}:${sy}`);
+        }
+        const signature = Array.from(sectors).sort().join('|');
+        if (signature === neighborhood) return;
+        neighborhood = signature;
+        const wanted = new Set();
+        liveChunks.clear();
+        for (const sector of sectors) {
+            const [sx, sy] = sector.split(':').map(Number);
+            for (let y = Math.max(0, sy - 2); y <= Math.min(99, sy + 2); y++) {
+                for (let x = Math.max(0, sx - 2); x <= Math.min(99, sx + 2); x++) {
+                    const key = `${x}:${y}`;
+                    wanted.add(key);
+                    if (Math.abs(x - sx) <= 1 && Math.abs(y - sy) <= 1) liveChunks.add(key);
+                }
+            }
+        }
+        for (const key of activeChunks) {
+            if (wanted.has(key)) continue;
+            for (const rock of chunks.get(key)) physics.remove(rock);
+            activeChunks.delete(key);
+        }
+        state.rocks = state.rocks.filter((rock) => activeChunks.has(rock.slot.chunk));
+        for (const key of wanted) {
+            if (activeChunks.has(key)) continue;
+            activeChunks.add(key);
+            const existing = chunks.get(key);
+            if (existing) {
+                for (const rock of existing) {
+                    physics.add(rock, rock.r * 1.1);
+                    state.rocks.push(rock);
+                }
+            } else {
+                const [x, y] = key.split(':').map(Number);
+                chunks.set(key, []);
+                for (const slot of sectorSlots(seed, x, y)) spawn({ ...slot, chunk: key });
+            }
+        }
+    }
+    if (!online) for (const slot of oreSlots) spawn(slot);
+
+    function join(id) {
+        if (participants.has(id)) return;
+        const session = addPlayer(id);
+        refreshChunks();
+        Object.assign(session.player, respawnPoint(session));
+        physics.add(session.player, playerRadius);
+        session.target = nearestTarget(session);
+    }
+    function leave(id) {
+        const session = participants.get(id);
+        if (!session) return;
+        physics.remove(session.player);
+        playerSessions.delete(session.player);
+        participants.delete(id);
+        refreshChunks();
+    }
+    function mark(kind, x, y, ore, extra = {}) {
+        state.marks.push({ kind, x, y, ore, at: state.time, eventId: ++eventId, ...extra });
+    }
+    function aim(session, p) {
+        const f = unit(p.x - session.player.x, p.y - session.player.y);
+        session.player.faceX = f.x;
+        session.player.faceY = f.y;
+        return f;
+    }
+    function plan(session, target, local) {
+        if (target.polygon) {
+            const tier = minerals[target.id].tier;
+            return session.level < tier ? null : planRock(target, local, session.level > tier);
+        }
+        const direction = unit(local.x, local.y);
+        const split = splitChip(target.shape, direction, target.radius, area(target.shape) * 0.08);
+        return { parts: split.parts, paths: fracturePaths(local, split.seam), direction };
+    }
+    function miningAction(session, target, spot) {
+        const local = rotate({ x: spot.x - target.x, y: spot.y - target.y }, -(target.angle ?? 0));
+        const points = target.polygon ?? target.shape;
+        const aimPoint = inPolygon(points, local) ? local : closestOnPath(local, points, true);
+        return { target, local: aimPoint, plan: plan(session, target, aimPoint), shape: points };
+    }
+    function contactPoint({ target, local }) {
+        const p = rotate(local, target.angle ?? 0);
+        return { x: target.x + p.x, y: target.y + p.y };
+    }
+    function targetSpot(session, actor) {
+        const { player } = session;
+        if (actor.polygon) return physics.closestPoint(actor, player);
+        const local = rotate({ x: player.x - actor.x, y: player.y - actor.y }, -actor.angle);
+        const edge = rotate(closestOnPath(local, actor.shape, true), actor.angle);
+        return { x: actor.x + edge.x, y: actor.y + edge.y };
+    }
+    function closestTarget(session, actors, eligible) {
+        let nearest = null;
+        let best = attackReach;
+        for (const actor of actors) {
+            if (
+                !eligible(actor) ||
+                distance(session.player, actor) > best + (actor.r ?? actor.radius) * 1.8
+            )
+                continue;
+            const spot = targetSpot(session, actor);
+            if (!spot) continue;
+            const reach = distance(session.player, spot);
+            if (reach > best || (nearest && reach === best)) continue;
+            nearest = { actor, spot };
+            best = reach;
+        }
+        return nearest;
+    }
+    function nearestTarget(session) {
+        return (
+            closestTarget(session, state.rocks, () => true) ??
+            closestTarget(session, state.shards, (shard) => shard.breakable && shard.z <= 18)
+        );
+    }
+    function impactMass(actor) {
+        if (!actor.polygon) return 1;
+        return clamp(area(actor.polygon) / (Math.PI * 35 ** 2), 0.57, 2.8);
+    }
+    function kick(actor, direction, speed, strength) {
+        const x = (actor.kickX ?? 0) + direction.x * speed;
+        const y = (actor.kickY ?? 0) + direction.y * speed;
+        const limit = Math.min(1, impulseLimit / (Math.hypot(x, y) || 1));
+        actor.kickX = x * limit;
+        actor.kickY = y * limit;
+        actor.impact = { at: state.time, x: direction.x, y: direction.y, strength };
+    }
+    function slam(actor, hit, direction, speed) {
+        if (speed < 68 || state.time - (actor.slamAt ?? -Infinity) < 115) return;
+        const ore = actor.ore ?? actor.id ?? hit.actor?.id ?? actor.impactOre;
+        if (!Object.hasOwn(minerals, ore)) return;
+        actor.slamAt = state.time;
+        slams++;
+        const strength = clamp(speed / 190, 0.4, 1.25);
+        mark('slam', hit.x, hit.y, ore, { direction, strength, z: 6 });
+        if (hit.actor?.polygon) {
+            const other = hit.actor;
+            const incoming = Math.max(0, -direction.x * hit.nx - direction.y * hit.ny);
+            const transfer = Math.min(190, (speed * 0.62 * impactMass(actor)) / impactMass(other));
+            if (incoming > 0.2) kick(other, direction, transfer * incoming, strength * 0.7);
+        }
+    }
+    function advanceImpact(actor, dt) {
+        const x = actor.kickX ?? 0,
+            y = actor.kickY ?? 0;
+        const speed = Math.hypot(x, y);
+        if (speed < 3) {
+            actor.kickX = 0;
+            actor.kickY = 0;
+            return;
+        }
+        const hit = moveActor(actor, x * dt, y * dt);
+        let vx = x,
+            vy = y;
+        if (hit) {
+            const inward = Math.min(0, x * hit.nx + y * hit.ny);
+            const kickDirection = { x: x / speed, y: y / speed };
+            slam(actor, hit, kickDirection, -inward);
+            vx -= 1.16 * inward * hit.nx;
+            vy -= 1.16 * inward * hit.ny;
+        }
+        const drag = Math.exp(-impactDrag * dt);
+        actor.kickX = vx * drag;
+        actor.kickY = vy * drag;
+    }
+    function startStrike(session, action) {
+        const { target } = action;
+        const spot = contactPoint(action);
+        const direction = aim(session, spot);
+        const ore = target.ore ?? target.id;
+        const z = target.z === undefined ? 14 : target.z + 4;
+        if (target.polygon) target.lastHit = state.time;
+        if (action.plan) {
+            const separated = Boolean(action.plan.loose || action.plan.parts);
+            const strength = separated ? 1.05 : 0.68;
+            session.breaking = { ...action, at: state.time, direction };
+            if (target.polygon) {
+                const braced = target.stage === 'charge' ? 0.42 : 1;
+                kick(
+                    target,
+                    direction,
+                    (165 * strength * braced) / Math.sqrt(impactMass(target)),
+                    strength,
+                );
+            }
+            if (target.polygon && target.stage === 'roam') {
+                target.stage = 'warn';
+                target.stageUntil = state.time + warnMs;
+                target.chargeDir = unit(session.player.x - target.x, session.player.y - target.y);
+                target.heading = Math.atan2(target.chargeDir.y, target.chargeDir.x);
+            }
+            mark('cut', spot.x, spot.y, ore, { z, direction, strength });
+        } else {
+            kick(session.player, { x: -direction.x, y: -direction.y }, 44, 0.38);
+            mark('clink', spot.x, spot.y, ore, { z, direction, strength: 0.6 });
+            session.message =
+                pickaxes[minerals[ore].tier].name + '부터 ' + minerals[ore].name + ' 채굴 가능';
+        }
+    }
+    function chip(rock, points, push, index, amount, breakable) {
+        const center = centroid(points);
+        const section = points.map((p) => ({ x: p.x - center.x, y: p.y - center.y }));
+        const radius = Math.sqrt(area(points) / Math.PI);
+        const collectible = amount > 0;
+        const speed = collectible ? 93 : 163;
+        const scatter = index === 0 ? -55 : index === 1 ? 55 : ((index % 4) - 1.5) * 39;
+        state.shards.push({
+            id: ++nextId,
+            ore: rock.id,
+            x: rock.x + center.x,
+            y: rock.y + center.y,
+            shape: section,
+            radius,
+            collectible,
+            amount,
+            breakable,
+            expiresAt: collectible
+                ? online
+                    ? state.time + dropLifetimeMs
+                    : Infinity
+                : state.time + debrisLifetimeMs,
+            z: rock.z ?? 12,
+            vz: (collectible ? 124 : 155) + (index % 3) * 18,
+            vx: (rock.vx ?? 0) + push.x * speed - push.y * scatter,
+            vy: (rock.vy ?? 0) + push.y * speed + push.x * scatter,
+            angle: 0,
+            spin: index ? 4.2 : -3.5,
+            bornAt: state.time,
+            bounces: 0,
+        });
+    }
+    function scatterChips(source, pieces, direction, canBreak, amount) {
+        const parts = pieces
+            .flatMap((piece) => breakOversizedChip(piece))
+            .sort((a, b) => area(b) - area(a));
+        parts.forEach((part, i) => {
+            const reward = i === 0 ? amount : 0;
+            chip(
+                source,
+                part,
+                direction,
+                i,
+                reward,
+                canBreak && reward > 0 && area(part) >= minRockCutArea,
+            );
+        });
+    }
+    function applyFracture(session, { target, local, plan: result, direction, shape }) {
+        const activeTargets = target.polygon ? state.rocks : state.shards;
+        if (!activeTargets.includes(target) || (target.polygon ?? target.shape) !== shape) return;
+        const name = minerals[target.ore ?? target.id].name;
+        if (target.polygon && !result.parts && !result.loose) {
+            if (target.cracks.length >= 4) target.cracks.shift();
+            target.cracks.push({ origin: local, paths: result.paths });
+            target.geometryRevision++;
+            session.message = name + '에 실금이 갔어요. 금이 난 자리를 다시 쳐 보세요.';
+            return;
+        }
+        if (target.polygon) {
+            const pieces = result.parts ?? [result.loose];
+            const amount = result.base.length
+                ? Math.min(2, Math.max(0, target.remainingYield - 4))
+                : target.remainingYield;
+            target.remainingYield -= amount;
+            const push = unit(
+                result.direction.x + direction.x * 0.42,
+                result.direction.y + direction.y * 0.42,
+            );
+            scatterChips(
+                { ...target, vx: (target.kickX ?? 0) * 0.44, vy: (target.kickY ?? 0) * 0.44 },
+                pieces,
+                push,
+                true,
+                amount,
+            );
+            if (result.base.length) {
+                target.polygon = result.base;
+                physics.replaceHull(target);
+                target.seam = result.seam;
+                target.cracks = target.cracks.filter((crack) =>
+                    inPolygon(result.base, crack.origin),
+                );
+                target.geometryRevision++;
+            } else {
+                state.rocks = state.rocks.filter((rock) => rock !== target);
+                physics.remove(target);
+                if (online) {
+                    const rocks = chunks.get(target.slot.chunk);
+                    rocks.splice(rocks.indexOf(target), 1);
+                }
+                session.stats.kills++;
+                depleted.push({
+                    slot: target.slot,
+                    respawnAt: state.time + (target.boss ? bossRespawnMs : respawnMs),
+                });
+            }
+        } else {
+            const { x, y, z, vx, vy, angle, ore } = target;
+            const pieces = result.parts.map((part) => part.map((p) => rotate(p, angle)));
+            state.shards = state.shards.filter((piece) => piece !== target);
+            scatterChips(
+                { x, y, z, vx, vy, id: ore },
+                pieces,
+                rotate(result.direction, angle),
+                false,
+                target.amount,
+            );
+        }
+        const spot = contactPoint({ target, local });
+        mark('split', spot.x, spot.y, target.ore ?? target.id, {
+            direction,
+            z: target.z === undefined ? 12 : target.z + 4,
+            strength: target.polygon && !result.base.length ? 1.3 : 0.95,
+        });
+        session.stats.cuts++;
+        session.message =
+            name + (target.polygon ? ' 조각이 떨어졌어요.' : ' 파편이 잘게 깨졌어요.');
+    }
+    function tryUpgrade(session) {
+        const next = pickaxes[session.level + 1];
+        if (!next || session.breaking) return;
+        const costs = Object.entries(next.recipe);
+        if (!costs.every(([ore, amount]) => session.bag[ore] >= amount)) return;
+        for (const [ore, amount] of costs) session.bag[ore] -= amount;
+        session.level++;
+        session.stats.upgrades++;
+        mark('upgrade', session.player.x, session.player.y, next.ore);
+        session.message = next.name + ' 완성!';
+    }
+    function moveActor(actor, dx, dy, slide = true) {
+        const boundary = actor.r ? actor.r * 1.08 + 8 : 24;
+        const delta = {
+            x: clamp(actor.x + dx, boundary, bounds.width - boundary) - actor.x,
+            y: clamp(actor.y + dy, boundary, bounds.height - boundary) - actor.y,
+        };
+        const hit = physics.move(actor, delta, slide);
+        if (hit) return hit;
+        const bx = dx - delta.x,
+            by = dy - delta.y;
+        if (Math.hypot(bx, by) <= 0.001) return null;
+        if (Math.abs(bx) > Math.abs(by))
+            return { nx: -Math.sign(bx), ny: 0, x: actor.x, y: actor.y };
+        return { nx: 0, ny: -Math.sign(by), x: actor.x, y: actor.y };
+    }
+    function stepDash(session, x, y, intent) {
+        const { dash, player } = session;
+        const { capacity, rechargeMs, durationMs, distance: travel } = dashRules;
+        if (dash.charges < capacity && state.time >= dash.nextChargeAt) {
+            dash.charges++;
+            dash.nextChargeAt = dash.charges < capacity ? dash.nextChargeAt + rechargeMs : 0;
+        }
+        if (state.time >= dash.until) {
+            dash.direction = null;
+            const direction = x || y ? { x, y } : intent;
+            if (dash.charges && direction && state.time - player.hurtAt >= 120) {
+                dash.direction = unit(direction.x, direction.y);
+                dash.until = state.time + durationMs;
+                dash.charges--;
+                if (!dash.nextChargeAt) dash.nextChargeAt = state.time + rechargeMs;
+            }
+        }
+        if (!dash.direction) return false;
+        const stride = (travel * Math.min(tickMs, dash.until - state.time)) / durationMs;
+        const { x: dx, y: dy } = dash.direction;
+        moveActor(player, dx * stride, dy * stride);
+        if (!session.swing) aim(session, { x: player.x + dx, y: player.y + dy });
+        return true;
+    }
+    function hurtPlayer(session, rock, hit, speed) {
+        const player = session.player;
+        if (state.time - player.hurtAt < 650) return;
+        player.hurtAt = state.time;
+        player.hp--;
+        session.stats.hitsTaken++;
+        const direction = { x: -hit.nx, y: -hit.ny };
+        const strength = rock.boss ? 1.28 : 1.05;
+        session.dash.until = state.time;
+        session.dash.direction = null;
+        player.impactOre = rock.id;
+        kick(player, direction, 100 + speed * 0.68, strength);
+        mark('hurt', hit.x, hit.y, rock.id, { direction, strength, z: 10 });
+        const recoil = { x: -direction.x, y: -direction.y };
+        kick(rock, recoil, (speed * 0.26) / impactMass(rock), 0.38);
+        if (!player.hp) {
+            Object.assign(player, respawnPoint(session), {
+                hp: player.maxHp,
+                kickX: 0,
+                kickY: 0,
+                impact: null,
+            });
+            physics.sync(player);
+            session.pending = null;
+            session.message = '돌진에 쓰러졌어요. 채굴터 입구에서 다시 시작합니다.';
+        } else {
+            session.message = '돌진에 맞았어요. 예고 방향 옆으로 피해 보세요.';
+        }
+    }
+    function stepMobs(dt) {
+        for (const rock of state.rocks) {
+            if (
+                online &&
+                rock.stage === 'roam' &&
+                !liveChunks.has(rock.slot.chunk) &&
+                !rock.kickX &&
+                !rock.kickY
+            )
+                continue;
+            advanceImpact(rock, dt);
+            if (rock.stage === 'warn') {
+                if (state.time >= rock.stageUntil) {
+                    rock.stage = 'charge';
+                    rock.chargeLeft = rock.chargeDistance;
+                }
+            } else if (rock.stage === 'charge') {
+                const speed = rock.slot.guaranteed === 0 ? 235 : 295;
+                const movement = Math.min(rock.chargeLeft, speed * dt);
+                const { x, y } = rock.chargeDir;
+                const before = { x: rock.x, y: rock.y };
+                const hit = moveActor(rock, x * movement, y * movement, false);
+                const moved = distance(before, rock);
+                rock.chargeLeft -= moved;
+                const hitPlayer = hit ? playerSessions.get(hit.actor) : null;
+                if (hitPlayer) {
+                    hurtPlayer(hitPlayer, rock, hit, speed);
+                } else if (hit) {
+                    slam(
+                        rock,
+                        hit,
+                        rock.chargeDir,
+                        Math.max(0, -(x * hit.nx + y * hit.ny) * speed),
+                    );
+                    kick(rock, { x: hit.nx, y: hit.ny }, (speed * 0.24) / impactMass(rock), 0.5);
+                }
+                if (hit || moved + 0.005 < movement || rock.chargeLeft <= 0.005) {
+                    rock.stage = 'recover';
+                    rock.stageUntil = state.time + recoverMs;
+                }
+            } else if (rock.stage === 'recover') {
+                if (state.time >= rock.stageUntil) {
+                    rock.stage = 'roam';
+                    rock.stageUntil = state.time;
+                }
+            } else {
+                if (state.time >= rock.stageUntil) {
+                    const back = Math.atan2(rock.slot.y - rock.y, rock.slot.x - rock.x);
+                    rock.heading = distance(rock, rock.slot) > 37 ? back : rng() * Math.PI * 2;
+                    rock.stageUntil = state.time + 700 + rng() * 1100;
+                }
+                if (rock.boss) continue;
+                const speed = 27 * dt;
+                moveActor(rock, Math.cos(rock.heading) * speed, Math.sin(rock.heading) * speed);
+            }
+        }
+    }
+    function advanceShard(shard, dt) {
+        if (state.time >= shard.expiresAt) return false;
+        const x = shard.x + shard.vx * dt;
+        const y = shard.y + shard.vy * dt;
+        shard.x = clamp(x, 16, bounds.width - 16);
+        shard.y = clamp(y, 20, bounds.height - 18);
+        if (x !== shard.x) shard.vx *= -0.43;
+        if (y !== shard.y) shard.vy *= -0.43;
+        if (shard.z || shard.vz) {
+            shard.vz -= 860 * dt;
+            shard.z += shard.vz * dt;
+            if (shard.z <= 0) {
+                shard.z = 0;
+                shard.vz = shard.bounces++ === 0 ? -shard.vz * 0.33 : 0;
+                shard.vx *= 0.67;
+                shard.vy *= 0.67;
+                shard.spin *= 0.6;
+            }
+        }
+        shard.angle += shard.spin * dt;
+        const friction = Math.exp(-(shard.z ? 0.65 : 4.3) * dt);
+        shard.vx *= friction;
+        shard.vy *= friction;
+        shard.spin *= friction;
+        if (!shard.collectible || state.time - shard.bornAt < 310 || shard.z > 18) return true;
+        let session = null;
+        let best = 44;
+        for (const candidate of participants.values()) {
+            const reach = distance(candidate.player, shard);
+            if (!candidate.dashing || candidate.swing?.target === shard || reach > best) continue;
+            if (session && reach === best) continue;
+            session = candidate;
+            best = reach;
+        }
+        if (!session) return true;
+        session.bag[shard.ore] += shard.amount;
+        session.stats.pickups++;
+        mark('collect', shard.x, shard.y, shard.ore, {
+            target: { x: session.player.x, y: session.player.y },
+            amount: shard.amount,
+        });
+        return false;
+    }
+    function stepSwing(session) {
+        const active = session.swing;
+        if (active && state.time >= active.contactAt && !active.contacted) {
+            active.contacted = true;
+            const target = active.target;
+            if (target && (target.polygon ? state.rocks : state.shards).includes(target)) {
+                const spot = targetSpot(session, target);
+                if (spot && distance(session.player, spot) <= attackReach)
+                    startStrike(session, miningAction(session, target, spot));
+            }
+        }
+        if (active && state.time >= active.endsAt) session.swing = null;
+        if (session.pending === null || session.swing) return;
+        const requestedAt = session.pending;
+        session.pending = null;
+        if (state.time - requestedAt > attackBufferMs) return;
+        const hit = nearestTarget(session);
+        if (hit) aim(session, hit.spot);
+        session.swing = {
+            at: state.time,
+            contactAt: state.time + swingWindupMs,
+            endsAt: state.time + swingTotalMs,
+            target: hit?.actor ?? null,
+            contacted: false,
+        };
+        mark('swing', session.player.x, session.player.y, pickaxes[session.level].ore ?? 'stone');
+    }
+
+    function tick(inputs) {
+        state.time += tickMs;
+        const dt = tickMs / 1000;
+        refreshChunks();
+        for (const [id, session] of participants) {
+            const { x = 0, y = 0, dashIntent = null, attack = false } = inputs.get(id) ?? {};
+            if (attack) session.pending = state.time;
+            advanceImpact(session.player, dt);
+            session.dashing = stepDash(session, x, y, dashIntent);
+        }
+        stepMobs(dt);
+        for (const session of participants.values()) {
+            if (session.breaking && state.time - session.breaking.at >= crackGrowthMs) {
+                applyFracture(session, session.breaking);
+                session.breaking = null;
+            }
+            stepSwing(session);
+        }
+        state.shards = state.shards.filter((shard) => advanceShard(shard, dt));
+        for (const session of participants.values()) tryUpgrade(session);
+        for (let i = depleted.length - 1; i >= 0; i--) {
+            const { slot, respawnAt } = depleted[i];
+            if (
+                state.time < respawnAt ||
+                (online && !activeChunks.has(slot.chunk)) ||
+                Array.from(participants.values()).some(
+                    ({ player }) => distance(player, slot) < (slot.boss ? 82 : 65),
+                ) ||
+                state.rocks.some((rock) => distance(rock, slot) < rock.r + (slot.boss ? 62 : 49))
+            )
+                continue;
+            spawn(slot);
+            depleted.splice(i, 1);
+        }
+        for (const session of participants.values()) session.target = nearestTarget(session);
+        state.marks = state.marks.filter((m) => state.time - m.at < 580);
+    }
+    function visualSwing(swing) {
+        if (!swing) return null;
+        const { at, contactAt, endsAt, contacted } = swing;
+        return { at, contactAt, endsAt, contacted };
+    }
+    function roundWire(value) {
+        return Math.round(value * 100) / 100;
+    }
+    function wirePoints(points) {
+        let rounded = wireGeometry.get(points);
+        if (!rounded) {
+            rounded = points.map(({ x, y }) => ({ x: roundWire(x), y: roundWire(y) }));
+            wireGeometry.set(points, rounded);
+        }
+        return rounded;
+    }
+    function wireRock(rock) {
+        const {
+            uid,
+            id,
+            geometryRevision,
+            x,
+            y,
+            r,
+            polygon,
+            seam,
+            cracks,
+            angle,
+            boss,
+            impact,
+            stage,
+            chargeDir,
+            chargeDistance,
+            heading,
+        } = rock;
+        return {
+            uid,
+            id,
+            geometryRevision,
+            x: roundWire(x),
+            y: roundWire(y),
+            r: roundWire(r),
+            polygon: wirePoints(polygon),
+            seam: wirePoints(seam),
+            cracks,
+            angle,
+            boss,
+            impact,
+            stage,
+            chargeDir,
+            chargeDistance,
+            heading,
+            lastHit: Number.isFinite(rock.lastHit) ? rock.lastHit : -100000,
+        };
+    }
+    function wirePlayer(player) {
+        return { ...player, hurtAt: Number.isFinite(player.hurtAt) ? player.hurtAt : -100000 };
+    }
+    function wireActor(actor) {
+        if (actor.polygon) return { uid: actor.uid, x: actor.x, y: actor.y };
+        return { id: actor.id, x: actor.x, y: actor.y };
+    }
+    function wireBreaking(breaking) {
+        return breaking
+            ? {
+                  at: breaking.at,
+                  target: wireActor(breaking.target),
+                  plan: { paths: breaking.plan.paths },
+              }
+            : null;
+    }
+    function snapshot(id) {
+        const session = participants.get(id);
+        if (!session) return null;
+        const near = (object) =>
+            Math.abs(object.x - session.player.x) <= 800 &&
+            Math.abs(object.y - session.player.y) <= 700;
+        const { level, target, breaking, dash, bag, stats, message, player, swing } = session;
+        const nearbyPeers = Array.from(participants.values()).filter(
+            (other) => other !== session && near(other.player),
+        );
+        return {
+            time: state.time,
+            level,
+            dash,
+            bag,
+            message,
+            bounds,
+            center,
+            player: wirePlayer(player),
+            stats: { ...stats, slams },
+            rocks: state.rocks.filter(near).map(wireRock),
+            obstacles: state.obstacles.filter(near),
+            shards: state.shards.filter(near),
+            marks: state.marks.filter(near),
+            target: target ? { actor: wireActor(target.actor), spot: target.spot } : null,
+            breaking: wireBreaking(breaking),
+            breakingOthers: nearbyPeers
+                .filter((other) => other.breaking)
+                .map((other) => wireBreaking(other.breaking)),
+            swing: visualSwing(swing),
+            others: nearbyPeers.map((other) => ({
+                ...wirePlayer(other.player),
+                id: other.id,
+                level: other.level,
+                dash: other.dash,
+                swing: visualSwing(other.swing),
+            })),
+        };
+    }
+
+    if (online) return { join, leave, tick, snapshot, dispose: physics.dispose };
+
+    const soloId = 'solo';
+    join(soloId);
+    const solo = participants.get(soloId);
+    for (const key of [
+        'player',
+        'level',
+        'dash',
+        'target',
+        'breaking',
+        'swing',
+        'bag',
+        'message',
+    ]) {
+        Object.defineProperty(state, key, {
+            enumerable: true,
+            get: () => solo[key],
+            set: (value) => {
+                solo[key] = value;
+            },
+        });
+    }
+    Object.defineProperty(solo.stats, 'slams', { enumerable: true, get: () => slams });
+    state.stats = solo.stats;
+    const inputs = new Map();
+    return {
+        state,
+        step(input) {
+            inputs.set(soloId, input);
+            tick(inputs);
+        },
+        attack() {
+            solo.pending = state.time;
+        },
+        cancelAttack() {
+            solo.pending = null;
+        },
+        dispose: physics.dispose,
+    };
+}

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ko">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <meta name="theme-color" content="#2f5240" />
+        <title>곡갱이 연쇄 시험장</title>
+        <link rel="stylesheet" href="./chain.css" />
+        <script type="module" src="./chain.js"></script>
+    </head>
+    <body>
+        <main class="arena" aria-label="곡갱이 연쇄 타격 시험장">
+            <canvas id="field" aria-label="광석을 쳐서 날리는 한 화면 시험장"></canvas>
+
+            <div class="hud">
+                <header class="scoreboard">
+                    <section class="score mine" aria-label="내가 주운 파편">
+                        <span class="tag">나</span>
+                        <output id="loot" aria-live="polite">0</output>
+                    </section>
+                    <section class="score chain" aria-label="최대 연쇄">
+                        <span class="tag">연쇄</span>
+                        <output id="chain-count" aria-live="polite">0</output>
+                    </section>
+                    <section class="score rival" aria-label="봇이 주운 파편">
+                        <span class="tag">봇</span>
+                        <output id="rival-loot" aria-live="polite">0</output>
+                    </section>
+                </header>
+
+                <p id="message" class="message" role="status" aria-live="polite"></p>
+
+                <footer class="controls">
+                    <p class="hint">
+                        <span class="hint-desktop">WASD·방향키 이동 · 광석 클릭 타격</span>
+                        <span class="hint-touch">빈 땅 탭 이동 · 광석 탭 타격</span>
+                    </p>
+                    <div class="tools">
+                        <label class="delay">
+                            <span>판정</span>
+                            <select id="delay" aria-label="판정 지연 모의 실험">
+                                <option value="0">즉시</option>
+                                <option value="120">120ms 지연</option>
+                                <option value="feedback">120ms + 내 타격 즉시</option>
+                            </select>
+                        </label>
+                        <button id="reset" type="button" aria-label="판 다시 놓기">
+                            <span aria-hidden="true">↺</span> 다시
+                        </button>
+                    </div>
+                </footer>
+            </div>
+        </main>
+    </body>
+</html>

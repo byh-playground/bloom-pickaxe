@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ko">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <meta name="theme-color" content="#8fb36a" />
+        <title>곡갱이.io 채굴터</title>
+        <link rel="stylesheet" href="./fracture.css" />
+        <script type="module" src="./fracture.js"></script>
+    </head>
+    <body>
+        <main class="fracture" aria-label="광석을 캐서 곡괭이를 개조하는 목업">
+            <canvas id="field" aria-label="광물 몹과 파편이 있는 채굴터"></canvas>
+
+            <header class="top">
+                <section class="tool-card" aria-label="내 곡갱이">
+                    <span class="tool-icon" aria-hidden="true">⛏</span>
+                    <div class="tool-info">
+                        <strong id="tool">나무 곡괙이</strong>
+                        <div id="dash-meter" role="group" aria-label="대시 충전">
+                            <span aria-hidden="true">대시</span>
+                        </div>
+                    </div>
+                </section>
+                <p id="status" class="status" role="status" aria-live="polite">
+                    광석 표면을 쳐서 쪼개 보세요
+                </p>
+                <button id="reset" type="button" aria-label="처음 상태로 되돌리기">
+                    <span aria-hidden="true">↺</span>
+                </button>
+            </header>
+
+            <aside id="online-panel" aria-label="채굴터 정보" hidden>
+                <span id="connection-status" role="status"></span>
+                <div id="center-compass" hidden>
+                    <span class="compass-arrow" aria-hidden="true"></span>
+                    <span id="center-distance"></span>
+                </div>
+            </aside>
+
+            <section class="touch-sticks" aria-label="터치 조작">
+                <div class="stick-control">
+                    <div class="stick-pad" id="move-stick" aria-label="대시 방향">
+                        <span class="stick-knob" aria-hidden="true">✥</span>
+                    </div>
+                    <span>대시</span>
+                </div>
+                <div class="stick-control">
+                    <button type="button" class="stick-pad" id="attack-button" aria-label="공격">
+                        <span class="stick-knob" aria-hidden="true">⛏</span>
+                    </button>
+                    <span>공격</span>
+                </div>
+            </section>
+
+            <footer class="bag" aria-label="곡괭이 개조 재료">
+                <strong id="next-tool">다음 · 돌 곡괭이</strong>
+                <ul id="ingredients" aria-label="보유량과 필요한 양"></ul>
+            </footer>
+        </main>
+    </body>
+</html>
