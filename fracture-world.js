@@ -49,6 +49,7 @@ export const pickaxes = [
 ];
 const contours = ['round', 'round', 'ridge', 'spire', 'ridge'];
 const respawnMs = 5500;
+const playerRespawnMs = 1150;
 const bossRespawnMs = 24000;
 const warnMs = 480;
 const recoverMs = 650;
@@ -388,6 +389,9 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             hp: 4,
             maxHp: 4,
             hurtAt: -Infinity,
+            deadAt: null,
+            respawnAt: null,
+            spawnRevision: 0,
         };
         const session = {
             id,
@@ -430,6 +434,45 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             }
         }
         return entry;
+    }
+    function randomRespawn(session) {
+        const margin = 70;
+        for (let i = 0; i < 48; i++) {
+            const x = online
+                ? entry.x + (rng() - 0.5) * 2500
+                : margin + rng() * (bounds.width - margin * 2);
+            const y = online
+                ? entry.y + (rng() - 0.25) * 1450
+                : margin + rng() * (bounds.height - margin * 2);
+            const point = { x, y };
+            if (
+                x < margin ||
+                y < margin ||
+                x > bounds.width - margin ||
+                y > bounds.height - margin ||
+                distance(session.player, point) < 125 ||
+                blockedSpawn(session, point) ||
+                state.obstacles.some(
+                    (obstacle) => distance(obstacle, point) < obstacle.r + playerRadius + 12,
+                )
+            )
+                continue;
+            if (online) {
+                const sx = Math.floor(x / worldSector.width),
+                    sy = Math.floor(y / worldSector.height);
+                let crowded = false;
+                for (let cy = Math.max(0, sy - 1); cy <= Math.min(99, sy + 1); cy++) {
+                    for (let cx = Math.max(0, sx - 1); cx <= Math.min(99, sx + 1); cx++) {
+                        const here = chunks.get(`${cx}:${cy}`) ?? sectorSlots(seed, cx, cy);
+                        if (here.some((actor) => distance(actor, point) < (actor.r ?? 80) + 42))
+                            crowded = true;
+                    }
+                }
+                if (crowded) continue;
+            }
+            return point;
+        }
+        return null;
     }
 
     for (const obstacle of state.obstacles) physics.add(obstacle, obstacle.r);
@@ -516,7 +559,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
     function leave(id) {
         const session = participants.get(id);
         if (!session) return;
-        physics.remove(session.player);
+        if (session.player.hp > 0) physics.remove(session.player);
         playerSessions.delete(session.player);
         participants.delete(id);
         refreshChunks();
@@ -835,7 +878,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
     }
     function hurtPlayer(session, rock, hit, speed) {
         const player = session.player;
-        if (state.time - player.hurtAt < 650) return;
+        if (!player.hp || state.time - player.hurtAt < 650) return;
         player.hurtAt = state.time;
         player.hp--;
         session.stats.hitsTaken++;
@@ -849,18 +892,36 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
         const recoil = { x: -direction.x, y: -direction.y };
         kick(rock, recoil, (speed * 0.26) / impactMass(rock), 0.38);
         if (!player.hp) {
-            Object.assign(player, respawnPoint(session), {
-                hp: player.maxHp,
-                kickX: 0,
-                kickY: 0,
-                impact: null,
-            });
-            physics.sync(player);
+            player.deadAt = state.time;
+            player.respawnAt = state.time + playerRespawnMs;
+            physics.remove(player);
             session.pending = null;
-            session.message = '돌진에 쓰러졌어요. 채굴터 입구에서 다시 시작합니다.';
+            session.swing = null;
+            session.breaking = null;
+            session.target = null;
+            session.dashing = false;
+            session.message = '쓰러졌어요. 잠시 뒤 다른 채굴터에서 다시 시작해요.';
         } else {
             session.message = '돌진에 맞았어요. 예고 방향 옆으로 피해 보세요.';
         }
+    }
+    function revive(session) {
+        const point = randomRespawn(session);
+        if (!point) return false;
+        const { player } = session;
+        Object.assign(player, point, {
+            hp: player.maxHp,
+            deadAt: null,
+            respawnAt: null,
+            spawnRevision: player.spawnRevision + 1,
+            hurtAt: state.time,
+            kickX: 0,
+            kickY: 0,
+            impact: null,
+        });
+        physics.add(player, playerRadius);
+        session.message = '새 채굴터에서 다시 시작했어요.';
+        return true;
     }
     function stepMobs(dt) {
         for (const rock of state.rocks) {
@@ -994,14 +1055,22 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
         state.time = (++simulationTick * 1000) / tickRate;
         const dt = tickMs / 1000;
         refreshChunks();
+        let relocated = false;
         for (const [id, session] of participants) {
+            if (!session.player.hp) {
+                if (state.time >= session.player.respawnAt)
+                    relocated = revive(session) || relocated;
+                continue;
+            }
             const { x = 0, y = 0, dashIntent = null, attack = false } = inputs.get(id) ?? {};
             if (attack) session.pending = state.time;
             advanceImpact(session.player, dt);
             session.dashing = stepDash(session, x, y, dashIntent);
         }
+        if (relocated) refreshChunks();
         stepMobs(dt);
         for (const session of participants.values()) {
+            if (!session.player.hp) continue;
             if (
                 session.breaking &&
                 state.time - session.breaking.at + clockToleranceMs >= crackGrowthMs
@@ -1027,7 +1096,8 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             spawn(slot);
             depleted.splice(i, 1);
         }
-        for (const session of participants.values()) session.target = nearestTarget(session);
+        for (const session of participants.values())
+            session.target = session.player.hp ? nearestTarget(session) : null;
         state.marks = state.marks.filter((m) => state.time - m.at < 580);
     }
     function visualSwing(swing) {

@@ -44,7 +44,8 @@ export function createDashPrediction(Rapier, serverTickRate = tickRate) {
         for (const rock of state.rocks) update('rock:' + rock.uid, rock, rock.r * 1.1);
         for (const [index, obstacle] of state.obstacles.entries())
             update('obstacle:' + index, obstacle, obstacle.r);
-        for (const other of state.others) update('peer:' + other.id, other, playerRadius);
+        for (const other of state.others)
+            if (other.hp !== 0) update('peer:' + other.id, other, playerRadius);
         for (const [key, actor] of obstacles) {
             if (active.has(key)) continue;
             physics.remove(actor);
@@ -54,6 +55,10 @@ export function createDashPrediction(Rapier, serverTickRate = tickRate) {
 
     function step(intent) {
         time += tickMs;
+        if (player.hp === 0) {
+            dash.direction = null;
+            return;
+        }
         if (dash.charges < dashRules.capacity && time + clockToleranceMs >= dash.nextChargeAt) {
             dash.charges++;
             dash.nextChargeAt =
@@ -142,11 +147,18 @@ export function createDashPrediction(Rapier, serverTickRate = tickRate) {
                 dash = null;
                 return;
             }
-            const nextAuthority = { x: state.player.x, y: state.player.y };
+            const nextAuthority = {
+                x: state.player.x,
+                y: state.player.y,
+                spawnRevision: state.player.spawnRevision,
+            };
             if (
                 authoritative &&
-                Math.hypot(nextAuthority.x - authoritative.x, nextAuthority.y - authoritative.y) >
-                    respawnDistance
+                (nextAuthority.spawnRevision !== authoritative.spawnRevision ||
+                    Math.hypot(
+                        nextAuthority.x - authoritative.x,
+                        nextAuthority.y - authoritative.y,
+                    ) > respawnDistance)
             )
                 displayed = null;
             authoritative = nextAuthority;

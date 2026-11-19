@@ -65,7 +65,11 @@ export function createPlayback(delayMs = playbackDelayMs, metrics) {
             display.set(cacheKey, model);
             Object.assign(model, actor);
             const next = second.get(key);
-            if (next && Math.hypot(actor.x - next.x, actor.y - next.y) <= 350) {
+            if (
+                next &&
+                actor.spawnRevision === next.spawnRevision &&
+                Math.hypot(actor.x - next.x, actor.y - next.y) <= 350
+            ) {
                 model.x = mix(actor.x, next.x, weight);
                 model.y = mix(actor.y, next.y, weight);
                 if (Number.isFinite(actor.z) && Number.isFinite(next.z))
@@ -371,7 +375,10 @@ export function createOnlineClient(
         sample(now) {
             const scene = playback?.sample(now);
             if (!scene) return null;
-            const local = prediction?.sample(now, scene.time);
+            const local =
+                scene.player.hp !== 0 && scene.player.spawnRevision === state?.player.spawnRevision
+                    ? prediction?.sample(now, scene.time)
+                    : null;
             if (local) {
                 const { dash, ...pose } = local;
                 return { ...scene, player: { ...scene.player, ...pose }, dash };

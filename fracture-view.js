@@ -1215,9 +1215,32 @@ export function createFractureView(canvas, touchControls) {
     function avatar(player, level, time, swingState, dash, name = '나', labelLift = 0) {
         const { x, y } = project(player);
         const facing = screenDirection({ x: player.faceX, y: player.faceY });
+        const dead = player.hp === 0 && Number.isFinite(player.deadAt);
+        const deathAge = dead ? Math.max(0, time - player.deadAt) : 0;
+        const deathLength = dead
+            ? Math.max(1, (player.respawnAt ?? player.deadAt + 900) - player.deadAt)
+            : 1;
+        const fall = dead
+            ? reducedMotion.matches
+                ? 1
+                : 1 - (1 - Math.min(1, deathAge / Math.min(320, deathLength))) ** 3
+            : 0;
+        const fade = dead ? Math.min(1, Math.max(0, (deathAge / deathLength - 0.7) / 0.3)) : 0;
         let minerMotion = miners.get(player);
-        if (!minerMotion || time < minerMotion.time) {
-            minerMotion = { x, y, time, stride: 0, walk: 0, side: facing.x < 0 ? -1 : 1 };
+        if (
+            !minerMotion ||
+            time < minerMotion.time ||
+            minerMotion.spawnRevision !== player.spawnRevision
+        ) {
+            minerMotion = {
+                x,
+                y,
+                time,
+                stride: 0,
+                walk: 0,
+                side: facing.x < 0 ? -1 : 1,
+                spawnRevision: player.spawnRevision,
+            };
             miners.set(player, minerMotion);
         }
         if (time > minerMotion.time) {
@@ -1231,14 +1254,14 @@ export function createFractureView(canvas, touchControls) {
         }
         if (Math.abs(facing.x) > 0.18) minerMotion.side = Math.sign(facing.x);
         const { side, walk, stride } = minerMotion;
-        const step = Math.cos(stride) * walk;
-        const breathing = Math.sin(time / 390) * 0.5;
-        const swingAge = swingState ? time - swingState.contactAt : Infinity;
+        const step = dead ? 0 : Math.cos(stride) * walk;
+        const breathing = dead ? 0 : Math.sin(time / 390) * 0.5;
+        const swingAge = !dead && swingState ? time - swingState.contactAt : Infinity;
         const windup =
             swingAge < 0 ? (time - swingState.at) / (swingState.contactAt - swingState.at) : 1;
-        const recovery = swingState && swingAge >= 0 ? 1 - Math.min(1, swingAge / 145) : 0;
+        const recovery = !dead && swingState && swingAge >= 0 ? 1 - Math.min(1, swingAge / 145) : 0;
         const follow = recovery ** 2;
-        const dashing = dash?.direction && time < dash.until;
+        const dashing = !dead && dash?.direction && time < dash.until;
         if (dashing) {
             const drift = screenDirection(dash.direction);
             ctx.save();
@@ -1253,22 +1276,29 @@ export function createFractureView(canvas, touchControls) {
             }
             ctx.restore();
         }
-        const hurt = time - (player.hurtAt ?? -Infinity) < 220;
-        const kick = recoil(player.impact, time, 5.4);
+        const hurt = !dead && time - (player.hurtAt ?? -Infinity) < 220;
+        const kick = recoil(dead ? null : player.impact, time, 5.4);
         const ink = '#3d3230';
         const boot = '#614538';
         const lamp = '#fff4c6';
         const ore = pickaxes[level]?.color ?? pickaxes[0].color;
 
-        ellipse(ctx, x, y + 3, 24, 7, '#31483e65');
+        ctx.save();
+        ctx.globalAlpha *= 1 - fade;
+        ellipse(ctx, x - side * fall * 13, y + 3, 24 + fall * 10, 7, '#31483e65');
+        if (dead && !reducedMotion.matches && deathAge > 180 && deathAge < 410) {
+            const dust = (deathAge - 180) / 230;
+            puff(x - side * (20 + dust * 14), y + 3 - dust * 5, 4 + dust * 5, (1 - dust) * 0.38);
+            ctx.globalAlpha = 1 - fade;
+        }
         if (hurt) {
             ctx.lineWidth = 2;
             ellipse(ctx, x, y, 22, 9, null, '#fa8c6c');
         }
         ctx.save();
-        ctx.translate(x + kick.x, y + kick.y);
+        ctx.translate(x + kick.x - side * 5 * fall, y + kick.y + 2 * fall);
         ctx.scale(side, 1);
-        ctx.rotate(kick.x * side * 0.018);
+        ctx.rotate(kick.x * side * 0.018 - fall * 1.48);
         ctx.lineWidth = 2;
         for (const [foot, cycle] of [
             [-9, step],
@@ -1321,7 +1351,18 @@ export function createFractureView(canvas, touchControls) {
         ellipse(ctx, 11, -27, 3.8, 1.9, '#e88372');
 
         const blink = time % 2450 > 2340;
-        if (hurt || follow > 0.4 || blink) {
+        if (dead) {
+            ctx.beginPath();
+            for (const eye of [-4, 7]) {
+                ctx.moveTo(eye - 2, -33);
+                ctx.lineTo(eye + 2, -29);
+                ctx.moveTo(eye + 2, -33);
+                ctx.lineTo(eye - 2, -29);
+            }
+            ctx.lineWidth = 1.7;
+            ctx.strokeStyle = ink;
+            ctx.stroke();
+        } else if (hurt || follow > 0.4 || blink) {
             for (const eye of [-4, 7])
                 line(
                     ctx,
@@ -1380,9 +1421,10 @@ export function createFractureView(canvas, touchControls) {
         ctx.save();
         ctx.translate(16 + follow * 4, -14 - follow * 2);
         const direction = Math.atan2(facing.x * side, -facing.y);
-        const angle = swingState
-            ? direction - Math.sin(Math.PI * windup) * 1.25 + recovery * 0.44
-            : 1.08;
+        const angle =
+            !dead && swingState
+                ? direction - Math.sin(Math.PI * windup) * 1.25 + recovery * 0.44
+                : 1.08;
         if (swingAge >= -10 && swingAge <= 60) {
             ctx.save();
             const sweep = Math.max(0, 1 - Math.max(0, swingAge) / 60);
@@ -1436,7 +1478,9 @@ export function createFractureView(canvas, touchControls) {
         if (follow > 0.29) ellipse(ctx, -0.2, 8, 3.8, 3.1, '#e7be88', ink);
         ctx.restore();
         ctx.restore();
+        ctx.restore();
 
+        if (dead) return;
         label(ctx, name, x, y - 69 - labelLift, 14, name === '나' ? '#fff6db' : '#ffecb6');
         if (Number.isFinite(player.maxHp)) {
             const width = 39;
