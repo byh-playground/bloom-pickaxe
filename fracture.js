@@ -2,7 +2,7 @@ import { createFractureWorld, dashRules, minerals, tickMs, pickaxes } from './fr
 import { createFractureView } from './fracture-view.js';
 import { createStick } from './fracture-stick.js';
 import { createOnlineClient, hasOnlineServer, normalizeServerOrigin } from './online-client.js';
-import { gameServer } from './online-endpoint.js';
+import { loadGameServer } from './game-server-config.js';
 
 const get = (id) => document.getElementById(id);
 const canvas = get('field');
@@ -50,10 +50,15 @@ const seed =
         : crypto.getRandomValues(new Uint32Array(1))[0];
 status.textContent = '채굴터 준비 중…';
 const offline = params.get('offline') === '1';
-const configuredServer = params.get('server') ?? gameServer;
+const configuredServer = offline ? null : (params.get('server') ?? (await loadGameServer()));
 const forceOnline = !offline && (params.get('online') === '1' || configuredServer !== null);
 const serverOrigin =
     configuredServer === null ? location.origin : normalizeServerOrigin(configuredServer);
+if (params.has('server') && serverOrigin) {
+    const menuUrl = new URL('./', location.href);
+    menuUrl.searchParams.set('server', serverOrigin);
+    get('return-menu').href = menuUrl;
+}
 const capabilities = !offline && serverOrigin && (await hasOnlineServer(serverOrigin));
 const loadRapier = () =>
     import('https://cdn.jsdelivr.net/npm/@dimforge/rapier2d-compat@0.21.0/dist/rapier.mjs')

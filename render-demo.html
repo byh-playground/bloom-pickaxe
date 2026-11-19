@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ko">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <meta name="theme-color" content="#244536" />
+        <title>곡갱이.io</title>
+        <link rel="stylesheet" href="./style.css" />
+        <script type="module" src="./main.js"></script>
+    </head>
+    <body>
+        <main class="meadow" aria-label="곡갱이.io">
+            <canvas id="field" aria-label="움직이는 광석을 채굴하는 초원"></canvas>
+            <div class="hud">
+                <header class="masthead">
+                    <div class="brand">
+                        <h1>곡갱이<span>.io</span></h1>
+                        <p class="preview-label">렌더 시안</p>
+                    </div>
+                    <section class="boss card" aria-label="중앙 보스">
+                        <div class="boss-icon" aria-hidden="true"><span></span></div>
+                        <div>
+                            <strong>중앙 보스 광석</strong>
+                            <p id="boss-status">황금 핵석</p>
+                        </div>
+                    </section>
+                </header>
+                <aside class="map-preview card" aria-label="월드 지도">
+                    <div class="map-paper">
+                        <button
+                            type="button"
+                            data-map-pin="meadow"
+                            aria-label="외곽 채굴터로 카메라 이동"
+                            title="외곽 채굴터"
+                        ></button>
+                        <button
+                            type="button"
+                            data-map-pin="boss"
+                            aria-label="중앙 보스로 카메라 이동"
+                            title="중앙 보스"
+                        ></button>
+                        <i id="map-camera" aria-hidden="true"></i>
+                    </div>
+                    <strong id="map-region"></strong>
+                    <span id="map-size"></span>
+                </aside>
+                <aside class="kit card" aria-label="곡갱이와 광석 주머니">
+                    <div class="kit-header">
+                        <div>
+                            <span class="caption">내 곡갱이</span>
+                            <h2 id="tool-name">기본 곡갱이</h2>
+                        </div>
+                        <span id="tool-tier" class="tool-tier">Ⅱ 등급</span>
+                    </div>
+                    <ul id="inventory" class="inventory" aria-label="보유 광석"></ul>
+                    <p id="requirements" class="requirements">광석을 캐서 강화 재료를 모으세요.</p>
+                </aside>
+                <div class="preview-actions">
+                    <p>화면을 끌거나 미니맵을 눌러 둘러보기</p>
+                    <button id="hit-preview" type="button">
+                        <span aria-hidden="true">✦</span> 타격 보기
+                    </button>
+                </div>
+            </div>
+        </main>
+    </body>
+</html>

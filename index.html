@@ -1,9 +1,39 @@
 <!doctype html>
 <html lang="ko">
-<head>
-    <meta charset="utf-8" />
-    <meta http-equiv="refresh" content="0; url=./fracture.html?online=1" />
-    <title>곡갱이.io</title>
-</head>
-<body><a href="./fracture.html?online=1">곡갱이.io 플레이</a></body>
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <meta name="theme-color" content="#233f30" />
+        <title>곡갱이.io</title>
+        <link rel="stylesheet" href="./menu.css" />
+        <script type="module" src="./menu.js"></script>
+    </head>
+    <body>
+        <main class="title-screen">
+            <section class="entry" aria-labelledby="game-title">
+                <h1 id="game-title">곡갱이<span>.io</span></h1>
+                <p class="intro">광석을 캐고, 곡괭이를 개조해 중앙 대광맥까지.</p>
+                <div class="actions">
+                    <button class="start" type="button" aria-describedby="menu-status">
+                        <span class="start-mark" aria-hidden="true"></span>
+                        <span class="start-label">게임 시작</span>
+                        <span class="arrow" aria-hidden="true">→</span>
+                    </button>
+                    <a class="practice" href="./fracture.html?offline=1">혼자 연습</a>
+                </div>
+                <p id="menu-status" class="status" role="status" aria-live="polite"></p>
+                <div class="controls" aria-label="조작 방법">
+                    <span class="desktop-controls"
+                        ><kbd>W A S D</kbd> 대시 <span class="divider"></span> 클릭 공격</span
+                    >
+                    <span class="touch-controls"
+                        >왼쪽 스틱 대시 <span class="divider"></span> 오른쪽 버튼 공격</span
+                    >
+                </div>
+            </section>
+            <div class="mine-scene" aria-hidden="true">
+                <canvas class="mine-art"></canvas>
+            </div>
+        </main>
+    </body>
 </html>

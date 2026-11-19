@@ -65,19 +65,23 @@ export function normalizeServerOrigin(value) {
 }
 
 export async function hasOnlineServer(origin = location.origin) {
-    try {
-        const response = await fetch(new URL('/api/online', origin), {
-            signal: AbortSignal.timeout(1800),
-            cache: 'no-store',
-            credentials: 'omit',
-            referrerPolicy: 'no-referrer',
-        });
-        if (!response.ok) return null;
-        const manifest = await response.json();
-        return manifest?.online === true && manifest.protocol === 1 ? manifest : null;
-    } catch {
-        return null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+            const response = await fetch(new URL('/api/online', origin), {
+                signal: AbortSignal.timeout(4500),
+                cache: 'no-store',
+                credentials: 'omit',
+                referrerPolicy: 'no-referrer',
+            });
+            if (response.status >= 500) continue;
+            if (!response.ok) return null;
+            const manifest = await response.json();
+            return manifest?.online === true && manifest.protocol === 1 ? manifest : null;
+        } catch {
+            // Retry a transient network error or timeout once.
+        }
     }
+    return null;
 }
 
 export function createOnlineClient(onChange, origin = location.origin, capabilities, engine) {
@@ -180,7 +184,7 @@ export function createOnlineClient(onChange, origin = location.origin, capabilit
         socket = connection;
         const timeout = setTimeout(() => {
             if (socket === connection && phase === 'connecting') connection.close();
-        }, 8000);
+        }, 12_000);
         connection.addEventListener('close', () => {
             clearTimeout(timeout);
             if (socket !== connection) return;

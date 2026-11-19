@@ -245,10 +245,20 @@ button:disabled {
     color: #fff8de;
 }
 #connection-status,
-#center-compass {
+#center-compass,
+#return-menu {
     padding: 5px 9px;
     border-radius: 999px;
     background: #294535e3;
+}
+#return-menu {
+    color: inherit;
+    text-decoration: none;
+    pointer-events: auto;
+}
+#return-menu:focus-visible,
+#return-menu:hover {
+    text-decoration: underline;
 }
 #center-compass {
     display: flex;
