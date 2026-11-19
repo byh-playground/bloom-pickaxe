@@ -5,6 +5,8 @@ const maxLeadMs = 120;
 const playerRadius = 13;
 const playerBoundary = 24;
 const correctionMs = 70;
+const maxDisplaySpeed = (dashRules.distance * 1000) / dashRules.durationMs + 100;
+const respawnDistance = 350;
 const clamp = (value, lower, upper) => Math.min(upper, Math.max(lower, value));
 
 export function createDashPrediction(Rapier, serverTickRate = tickRate) {
@@ -13,13 +15,15 @@ export function createDashPrediction(Rapier, serverTickRate = tickRate) {
     const obstacles = new Map();
     const player = { x: 0, y: 0 };
     physics.add(player, playerRadius);
-    let bounds, dash, time, frameAt, limit, receivedAt;
+    let bounds, dash, time, frameAt, limit;
     let pending = [];
     let acknowledged = { x: 0, y: 0 };
     let held = acknowledged;
     let cursor = 0;
     let correction = null;
     let hurtAt = -Infinity;
+    let displayed = null;
+    let authoritative = null;
 
     function updateColliders(state) {
         const active = new Set();
@@ -138,12 +142,14 @@ export function createDashPrediction(Rapier, serverTickRate = tickRate) {
                 dash = null;
                 return;
             }
-            let previous;
-            if (dash) {
-                const pose = presentationPose(now);
-                const offset = correctionAt(now);
-                previous = { x: pose.x + offset.x, y: pose.y + offset.y };
-            }
+            const nextAuthority = { x: state.player.x, y: state.player.y };
+            if (
+                authoritative &&
+                Math.hypot(nextAuthority.x - authoritative.x, nextAuthority.y - authoritative.y) >
+                    respawnDistance
+            )
+                displayed = null;
+            authoritative = nextAuthority;
             let first = 0;
             while (pending[first]?.seq <= ack) acknowledged = pending[first++];
             pending = pending.slice(first);
@@ -155,28 +161,39 @@ export function createDashPrediction(Rapier, serverTickRate = tickRate) {
             physics.sync(player);
             time = state.time;
             dash = { ...state.dash };
-            receivedAt = now;
             limit = now + maxLeadMs;
             const replayMs = pending.length ? clamp(now - pending[0].at, 0, maxLeadMs) : 0;
             frameAt = now - replayMs - (pending.length ? tickMs : 0);
             const pose = presentationPose(now);
 
-            const dx = previous ? previous.x - pose.x : 0;
-            const dy = previous ? previous.y - pose.y : 0;
+            const dx = displayed ? displayed.x - pose.x : 0;
+            const dy = displayed ? displayed.y - pose.y : 0;
             const delta = Math.hypot(dx, dy);
             correction =
-                delta > 0.5 && delta < 65 && hurtAt === state.player.hurtAt
-                    ? { x: dx, y: dy, at: now }
-                    : null;
+                delta > 0.5 && hurtAt === state.player.hurtAt ? { x: dx, y: dy, at: now } : null;
             hurtAt = state.player.hurtAt;
         },
         sample(now, displayTime) {
-            if (!dash || now - receivedAt > maxLeadMs * 2) return null;
+            if (!dash) return null;
             const pose = presentationPose(now);
             const offset = correctionAt(now);
+            const x = pose.x + offset.x;
+            const y = pose.y + offset.y;
+            if (displayed) {
+                const distance = Math.hypot(x - displayed.x, y - displayed.y);
+                const budget = (maxDisplaySpeed * clamp(now - displayed.at, 0, 50)) / 1000;
+                const fraction = distance ? Math.min(1, budget / distance) : 1;
+                displayed = {
+                    x: displayed.x + (x - displayed.x) * fraction,
+                    y: displayed.y + (y - displayed.y) * fraction,
+                    at: now,
+                };
+            } else {
+                displayed = { x, y, at: now };
+            }
             return {
-                x: pose.x + offset.x,
-                y: pose.y + offset.y,
+                x: displayed.x,
+                y: displayed.y,
                 faceX: player.faceX,
                 faceY: player.faceY,
                 dash: {
