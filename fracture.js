@@ -1,4 +1,4 @@
-import { createFractureWorld, dashRules, minerals, tickMs, pickaxes } from './fracture-world.js';
+import { createFractureWorld, minerals, tickMs, pickaxes } from './fracture-world.js';
 import { createFractureView } from './fracture-view.js';
 import { createStick } from './fracture-stick.js';
 import {
@@ -20,14 +20,6 @@ const connectionStatus = get('connection-status');
 const compass = get('center-compass');
 const centerDistance = get('center-distance');
 const tool = get('tool');
-const dashMeter = get('dash-meter');
-const dashPips = Array.from({ length: dashRules.capacity }, () => {
-    const pip = document.createElement('i');
-    pip.className = 'dash-charge';
-    pip.setAttribute('aria-hidden', 'true');
-    dashMeter.append(pip);
-    return pip;
-});
 const nextTool = get('next-tool');
 const ingredientList = get('ingredients');
 const ingredients = Object.entries(minerals).map(([id, ore]) => {
@@ -98,14 +90,12 @@ let impactNoise;
 const held = new Set();
 const keys = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight'];
 let heard = new WeakSet();
-let queuedDash = null;
 let queuedAttack = false;
 let sentMovement = '';
 let sentAt = -Infinity;
 const movePad = get('move-stick');
 const moveStick = createStick(movePad, audioReady, {
-    onVector(input) {
-        queuedDash = view.stickVector(input);
+    onVector() {
         if (online) sendInput(performance.now());
     },
 });
@@ -131,12 +121,11 @@ attackButton.addEventListener('click', (event) => {
 });
 
 function resetInputs() {
-    queuedDash = null;
     queuedAttack = false;
     held.clear();
     moveStick.reset();
     world?.cancelAttack();
-    if (online) online.send({ x: 0, y: 0, dashIntent: null, attack: false });
+    if (online) online.send({ x: 0, y: 0, attack: false });
     sentMovement = '';
 }
 
@@ -260,19 +249,6 @@ function playSounds(state) {
 function refresh(state) {
     const current = pickaxes[state.level];
     const next = pickaxes[state.level + 1];
-    const { charges, nextChargeAt, direction } = state.dash;
-    const dashLabel = `대시 ${charges}/${dashRules.capacity}회 준비`;
-    if (dashMeter.getAttribute('aria-label') !== dashLabel)
-        dashMeter.setAttribute('aria-label', dashLabel);
-    const progress = 1 - (nextChargeAt - state.time) / dashRules.rechargeMs;
-    dashPips.forEach((pip, index) => {
-        const value = String(
-            index < charges ? 1 : index === charges ? Math.min(1, Math.max(0, progress)) : 0,
-        );
-        if (pip.style.getPropertyValue('--dash-fill') !== value)
-            pip.style.setProperty('--dash-fill', value);
-    });
-    movePad.toggleAttribute('data-dashing', Boolean(direction));
     if (renderedLevel !== state.level) {
         renderedLevel = state.level;
         updateText(tool, current.name);
@@ -291,8 +267,8 @@ function refresh(state) {
             ? '연결이 끊겼어요. 다시 연결해 주세요.'
             : state.message) ||
             (touchScreen.matches
-                ? '왼쪽은 대시 · 오른쪽 버튼은 가까운 몹 공격'
-                : 'WASD로 대시 · 클릭해 가까운 몹 공격'),
+                ? '왼쪽은 이동 · 오른쪽 버튼은 가까운 몹 공격'
+                : 'WASD로 이동 · 클릭해 가까운 몹 공격'),
     );
     if (online && online.info().phase === 'online') {
         const { channelId } = online.info();
@@ -323,11 +299,10 @@ function sendInput(now) {
     if (!online) return;
     const { x, y } = getAxes();
     const movement = x.toFixed(3) + ':' + y.toFixed(3);
-    if (!queuedDash && !queuedAttack && movement === sentMovement && now - sentAt < 100) return;
-    if (!online.send({ x, y, dashIntent: queuedDash, attack: queuedAttack })) return;
+    if (!queuedAttack && movement === sentMovement && now - sentAt < 100) return;
+    if (!online.send({ x, y, attack: queuedAttack })) return;
     sentMovement = movement;
     sentAt = now;
-    queuedDash = null;
     queuedAttack = false;
 }
 canvas.addEventListener('pointerdown', (e) => {
@@ -359,8 +334,6 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     if (e.repeat || held.has(e.code)) return;
     held.add(e.code);
-    const axes = getAxes();
-    queuedDash = axes.x || axes.y ? axes : null;
     if (online) sendInput(performance.now());
 });
 window.addEventListener('keyup', (e) => {
@@ -385,9 +358,8 @@ function frame(now) {
         lastFrame = now;
         const axes = getAxes();
         while (carry >= tickMs) {
-            world.step({ ...axes, dashIntent: queuedDash });
+            world.step(axes);
             offlinePlayback.push(world.state);
-            queuedDash = null;
             carry -= tickMs;
         }
         state = offlinePlayback.sample(now);

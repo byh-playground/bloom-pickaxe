@@ -1,4 +1,4 @@
-import { createDashPrediction } from './client-prediction.js';
+import { createMovementPrediction } from './client-prediction.js';
 
 const sameShape = (a, b) =>
     a === b ||
@@ -104,7 +104,6 @@ export function createPlayback(delayMs = playbackDelayMs, metrics) {
         frames.push({
             state: {
                 ...state,
-                dash: { ...state.dash },
                 bag: { ...state.bag },
                 marks: [...state.marks],
             },
@@ -231,6 +230,7 @@ export function createOnlineClient(
     let players, rocks, shards, marks;
     let Rapier, prediction;
     const sentInputs = new Map();
+    let previousInput = { x: 0, y: 0 };
     const info = () => ({ phase, channelId, playerId });
     const notify = () => onChange(info());
 
@@ -284,7 +284,7 @@ export function createOnlineClient(
         if (Rapier && Number.isSafeInteger(raw.ackSeq)) {
             const reported = capabilities?.tickRate;
             const serverTickRate = Number.isInteger(reported) && reported > 0 ? reported : 100;
-            prediction ??= createDashPrediction(Rapier, serverTickRate);
+            prediction ??= createMovementPrediction(Rapier, serverTickRate);
             prediction.reconcile(state, now);
         }
         playback.push(state, now);
@@ -305,6 +305,7 @@ export function createOnlineClient(
         seq = 0;
         playback = createPlayback(playbackDelayMs, metrics);
         sentInputs.clear();
+        previousInput = { x: 0, y: 0 };
         players = makeActors();
         rocks = makeActors();
         shards = makeActors();
@@ -366,10 +367,14 @@ export function createOnlineClient(
             socket.send(JSON.stringify({ type: 'input', seq: ++seq, ...input }));
             const now = performance.now();
             prediction?.record(seq, input, now);
-            if (metrics && (input.dashIntent || input.attack)) {
+            if (
+                metrics &&
+                (input.x !== previousInput.x || input.y !== previousInput.y || input.attack)
+            ) {
                 sentInputs.set(seq, now);
                 if (sentInputs.size > 64) sentInputs.delete(sentInputs.keys().next().value);
             }
+            previousInput = input;
             return true;
         },
         sample(now) {
@@ -377,12 +382,9 @@ export function createOnlineClient(
             if (!scene) return null;
             const local =
                 scene.player.hp !== 0 && scene.player.spawnRevision === state?.player.spawnRevision
-                    ? prediction?.sample(now, scene.time)
+                    ? prediction?.sample(now)
                     : null;
-            if (local) {
-                const { dash, ...pose } = local;
-                return { ...scene, player: { ...scene.player, ...pose }, dash };
-            }
+            if (local) return { ...scene, player: { ...scene.player, ...local } };
             return scene;
         },
     };

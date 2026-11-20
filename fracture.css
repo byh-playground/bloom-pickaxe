@@ -166,35 +166,6 @@ button:disabled {
     display: grid;
     gap: 4px;
 }
-#dash-meter {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    color: #586758;
-    font-size: 10px;
-    line-height: 1;
-    font-weight: 850;
-}
-.dash-charge {
-    position: relative;
-    width: 19px;
-    height: 6px;
-    overflow: hidden;
-    border-radius: 999px;
-    background: #cfcab5;
-    box-shadow: inset 0 0 0 1px #918c6d6a;
-}
-.dash-charge::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    transform: scaleX(var(--dash-fill, 1));
-    transform-origin: left center;
-    background: #487361;
-}
-#move-stick[data-dashing] .stick-knob {
-    background: #f7ce7c;
-}
 .status {
     justify-self: center;
     max-width: 440px;

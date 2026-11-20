@@ -4,7 +4,6 @@ export function createStick(element, onStart, { onVector } = {}) {
     let pointer = null;
     let x = 0;
     let y = 0;
-    let armed = true;
     const knob = element.querySelector('.stick-knob');
 
     function setVector(dx, dy, radius = 1) {
@@ -20,10 +19,10 @@ export function createStick(element, onStart, { onVector } = {}) {
     function reset() {
         const id = pointer;
         pointer = null;
-        armed = true;
         if (id !== null && element.hasPointerCapture(id)) element.releasePointerCapture(id);
         element.removeAttribute('data-held');
         setVector(0, 0);
+        onVector?.();
     }
 
     function update(event) {
@@ -31,12 +30,7 @@ export function createStick(element, onStart, { onVector } = {}) {
         const dx = event.clientX - box.left - box.width / 2;
         const dy = event.clientY - box.top - box.height / 2;
         setVector(dx, dy, Math.min(box.width, box.height) / 2);
-        const travel = Math.hypot(dx, dy);
-        if (travel <= deadzone) armed = true;
-        if (armed && travel >= deadzone + 2) {
-            armed = false;
-            onVector?.({ x, y });
-        }
+        onVector?.();
     }
 
     element.addEventListener('pointerdown', (event) => {
@@ -60,7 +54,7 @@ export function createStick(element, onStart, { onVector } = {}) {
     return {
         reset,
         read() {
-            return onVector && armed ? { x: 0, y: 0 } : { x, y };
+            return { x, y };
         },
     };
 }

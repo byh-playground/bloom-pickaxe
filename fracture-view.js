@@ -1212,7 +1212,7 @@ export function createFractureView(canvas, touchControls) {
             ctx.stroke(minerArt[id]);
         }
     }
-    function avatar(player, level, time, swingState, dash, name = '나', labelLift = 0) {
+    function avatar(player, level, time, swingState, name = '나', labelLift = 0) {
         const { x, y } = project(player);
         const facing = screenDirection({ x: player.faceX, y: player.faceY });
         const dead = player.hp === 0 && Number.isFinite(player.deadAt);
@@ -1261,21 +1261,6 @@ export function createFractureView(canvas, touchControls) {
             swingAge < 0 ? (time - swingState.at) / (swingState.contactAt - swingState.at) : 1;
         const recovery = !dead && swingState && swingAge >= 0 ? 1 - Math.min(1, swingAge / 145) : 0;
         const follow = recovery ** 2;
-        const dashing = !dead && dash?.direction && time < dash.until;
-        if (dashing) {
-            const drift = screenDirection(dash.direction);
-            ctx.save();
-            ctx.globalAlpha = 0.48;
-            for (const offset of [-5, 3, 9]) {
-                const from = {
-                    x: x - drift.x * 15 - drift.y * offset,
-                    y: y - drift.y * 15 + drift.x * offset,
-                };
-                const to = { x: from.x - drift.x * 23, y: from.y - drift.y * 23 };
-                line(ctx, [from, to], '#fff2c5', offset === 3 ? 2.3 : 1.25);
-            }
-            ctx.restore();
-        }
         const hurt = !dead && time - (player.hurtAt ?? -Infinity) < 220;
         const kick = recoil(dead ? null : player.impact, time, 5.4);
         const ink = '#3d3230';
@@ -1310,7 +1295,7 @@ export function createFractureView(canvas, touchControls) {
         }
 
         ctx.translate(3.5 * follow, -Math.abs(step) * 2 + breathing + 2 * follow);
-        ctx.rotate(0.19 * follow + step * 0.045 + (dashing ? 0.14 : 0));
+        ctx.rotate(0.19 * follow + step * 0.045);
         ctx.scale(1 + 0.08 * follow, 1 - 0.09 * follow);
         minerPart('backpack', '#427063', '#34473c');
         minerPart('packFlap', '#77926b', '#34473c', 1.5);
@@ -1760,21 +1745,13 @@ export function createFractureView(canvas, touchControls) {
             if (kind === 'rock') rock(a, state);
             if (kind === 'wall') wall(a);
             if (kind === 'shard') shard(a, state);
-            if (kind === 'player') avatar(a, state.level, state.time, state.swing, state.dash);
+            if (kind === 'player') avatar(a, state.level, state.time, state.swing);
             if (kind === 'other') {
                 const lift =
                     Math.abs(p.x - playerScreen.x) < 68 && Math.abs(p.y - playerScreen.y) < 23
                         ? 27
                         : 0;
-                avatar(
-                    a,
-                    a.level,
-                    state.time,
-                    a.swing,
-                    a.dash,
-                    '광부 ' + String(a.id).slice(-4),
-                    lift,
-                );
+                avatar(a, a.level, state.time, a.swing, '광부 ' + String(a.id).slice(-4), lift);
             }
         }
         trackLandings(state.shards, state.time);

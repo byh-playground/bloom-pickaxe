@@ -16,7 +16,12 @@ export const tickRate = 30;
 export const tickMs = 1000 / tickRate;
 export const clockToleranceMs = 1e-6;
 const attackReach = 72;
-export const dashRules = { capacity: 3, rechargeMs: 500, durationMs: 200, distance: 78 };
+export const walkSpeed = 235;
+export function walkDelta(x, y, dt) {
+    const distance = (walkSpeed * dt) / Math.max(1, Math.hypot(x, y));
+    return { x: x * distance, y: y * distance };
+}
+const emptyDash = { charges: 0, nextChargeAt: 0, until: 0, direction: null };
 const playerRadius = 13;
 const chipSpanLimit = 52;
 const debrisLifetimeMs = 1200;
@@ -397,7 +402,6 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             id,
             player,
             level: 0,
-            dash: { charges: dashRules.capacity, nextChargeAt: 0, until: 0, direction: null },
             target: null,
             breaking: null,
             swing: null,
@@ -405,7 +409,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             stats: { cuts: 0, pickups: 0, upgrades: 0, kills: 0, hitsTaken: 0 },
             message: '',
             pending: null,
-            dashing: false,
+            moving: false,
         };
         participants.set(id, session);
         playerSessions.set(player, session);
@@ -852,28 +856,12 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             return { nx: -Math.sign(bx), ny: 0, x: actor.x, y: actor.y };
         return { nx: 0, ny: -Math.sign(by), x: actor.x, y: actor.y };
     }
-    function stepDash(session, x, y, intent) {
-        const { dash, player } = session;
-        const { capacity, rechargeMs, durationMs, distance: travel } = dashRules;
-        if (dash.charges < capacity && state.time + clockToleranceMs >= dash.nextChargeAt) {
-            dash.charges++;
-            dash.nextChargeAt = dash.charges < capacity ? dash.nextChargeAt + rechargeMs : 0;
-        }
-        if (state.time + clockToleranceMs >= dash.until) {
-            dash.direction = null;
-            const direction = x || y ? { x, y } : intent;
-            if (dash.charges && direction && state.time - player.hurtAt >= 120) {
-                dash.direction = unit(direction.x, direction.y);
-                dash.until = state.time + durationMs;
-                dash.charges--;
-                if (!dash.nextChargeAt) dash.nextChargeAt = state.time + rechargeMs;
-            }
-        }
-        if (!dash.direction) return false;
-        const stride = (travel * Math.min(tickMs, dash.until - state.time)) / durationMs;
-        const { x: dx, y: dy } = dash.direction;
-        moveActor(player, dx * stride, dy * stride);
-        if (!session.swing) aim(session, { x: player.x + dx, y: player.y + dy });
+    function walkPlayer(session, x, y, dt) {
+        if (!x && !y) return false;
+        const player = session.player;
+        const move = walkDelta(x, y, dt);
+        moveActor(player, move.x, move.y);
+        if (!session.swing) aim(session, { x: player.x + x, y: player.y + y });
         return true;
     }
     function hurtPlayer(session, rock, hit, speed) {
@@ -884,8 +872,6 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
         session.stats.hitsTaken++;
         const direction = { x: -hit.nx, y: -hit.ny };
         const strength = rock.boss ? 1.28 : 1.05;
-        session.dash.until = state.time;
-        session.dash.direction = null;
         player.impactOre = rock.id;
         kick(player, direction, 100 + speed * 0.68, strength);
         mark('hurt', hit.x, hit.y, rock.id, { direction, strength, z: 10 });
@@ -899,7 +885,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             session.swing = null;
             session.breaking = null;
             session.target = null;
-            session.dashing = false;
+            session.moving = false;
             session.message = '쓰러졌어요. 잠시 뒤 다른 채굴터에서 다시 시작해요.';
         } else {
             session.message = '돌진에 맞았어요. 예고 방향 옆으로 피해 보세요.';
@@ -1009,7 +995,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
         let best = 44;
         for (const candidate of participants.values()) {
             const reach = distance(candidate.player, shard);
-            if (!candidate.dashing || candidate.swing?.target === shard || reach > best) continue;
+            if (!candidate.moving || candidate.swing?.target === shard || reach > best) continue;
             if (session && reach === best) continue;
             session = candidate;
             best = reach;
@@ -1062,10 +1048,10 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
                     relocated = revive(session) || relocated;
                 continue;
             }
-            const { x = 0, y = 0, dashIntent = null, attack = false } = inputs.get(id) ?? {};
+            const { x = 0, y = 0, attack = false } = inputs.get(id) ?? {};
             if (attack) session.pending = state.time;
             advanceImpact(session.player, dt);
-            session.dashing = stepDash(session, x, y, dashIntent);
+            session.moving = walkPlayer(session, x, y, dt);
         }
         if (relocated) refreshChunks();
         stepMobs(dt);
@@ -1177,14 +1163,14 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
         const near = (object) =>
             Math.abs(object.x - session.player.x) <= 800 &&
             Math.abs(object.y - session.player.y) <= 700;
-        const { level, target, breaking, dash, bag, stats, message, player, swing } = session;
+        const { level, target, breaking, bag, stats, message, player, swing } = session;
         const nearbyPeers = Array.from(participants.values()).filter(
             (other) => other !== session && near(other.player),
         );
         return {
             time: state.time,
             level,
-            dash,
+            dash: emptyDash,
             bag,
             message,
             bounds,
@@ -1205,7 +1191,6 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
                 ...wirePlayer(other.player),
                 id: other.id,
                 level: other.level,
-                dash: other.dash,
                 swing: visualSwing(other.swing),
             })),
         };
@@ -1216,16 +1201,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
     const soloId = 'solo';
     join(soloId);
     const solo = participants.get(soloId);
-    for (const key of [
-        'player',
-        'level',
-        'dash',
-        'target',
-        'breaking',
-        'swing',
-        'bag',
-        'message',
-    ]) {
+    for (const key of ['player', 'level', 'target', 'breaking', 'swing', 'bag', 'message']) {
         Object.defineProperty(state, key, {
             enumerable: true,
             get: () => solo[key],
