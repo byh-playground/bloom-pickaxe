@@ -17,6 +17,10 @@ export const tickMs = 1000 / tickRate;
 export const clockToleranceMs = 1e-6;
 const attackReach = 72;
 export const walkSpeed = 235;
+const ramRunUp = 24;
+const ramSpeed = 170;
+const ramRecoilMs = 150;
+const chainWindowMs = 800;
 export function walkDelta(x, y, dt) {
     const distance = (walkSpeed * dt) / Math.max(1, Math.hypot(x, y));
     return { x: x * distance, y: y * distance };
@@ -385,6 +389,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
     const wireGeometry = new WeakMap();
     let neighborhood = '';
     let slams = 0;
+    const impactFractures = [];
 
     function addPlayer(id) {
         const player = {
@@ -397,6 +402,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             deadAt: null,
             respawnAt: null,
             spawnRevision: 0,
+            ramRecoverUntil: 0,
         };
         const session = {
             id,
@@ -410,6 +416,8 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             message: '',
             pending: null,
             moving: false,
+            ramTravel: 0,
+            ramHeading: null,
         };
         participants.set(id, session);
         playerSessions.set(player, session);
@@ -639,6 +647,19 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
         actor.kickY = y * limit;
         actor.impact = { at: state.time, x: direction.x, y: direction.y, strength };
     }
+    function tagRam(rock, session) {
+        rock.ramSource = session.id;
+        rock.ramUntil = state.time + chainWindowMs;
+    }
+    function fractureOnImpact(session, target, hit, direction) {
+        const action = miningAction(session, target, hit);
+        if (!action.plan) {
+            mark('clink', hit.x, hit.y, target.id, { direction, strength: 0.7, z: 10 });
+            return;
+        }
+        target.lastHit = state.time;
+        impactFractures.push({ session, action: { ...action, direction } });
+    }
     function slam(actor, hit, direction, speed) {
         if (speed < 68 || state.time - (actor.slamAt ?? -Infinity) < 115) return;
         const ore = actor.ore ?? actor.id ?? hit.actor?.id ?? actor.impactOre;
@@ -651,7 +672,14 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             const other = hit.actor;
             const incoming = Math.max(0, -direction.x * hit.nx - direction.y * hit.ny);
             const transfer = Math.min(190, (speed * 0.62 * impactMass(actor)) / impactMass(other));
-            if (incoming > 0.2) kick(other, direction, transfer * incoming, strength * 0.7);
+            if (incoming > 0.2) {
+                kick(other, direction, transfer * incoming, strength * 0.7);
+                const source = actor.ramUntil >= state.time && participants.get(actor.ramSource);
+                if (source && speed >= 105 && incoming >= 0.5) {
+                    tagRam(other, source);
+                    fractureOnImpact(source, other, hit, direction);
+                }
+            }
         }
     }
     function advanceImpact(actor, dt) {
@@ -689,6 +717,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             const strength = separated ? 1.05 : 0.68;
             session.breaking = { ...action, at: state.time, direction };
             if (target.polygon) {
+                target.ramUntil = 0;
                 const braced = target.stage === 'charge' ? 0.42 : 1;
                 kick(
                     target,
@@ -857,26 +886,60 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
         return { nx: 0, ny: -Math.sign(by), x: actor.x, y: actor.y };
     }
     function walkPlayer(session, x, y, dt) {
-        if (!x && !y) return false;
         const player = session.player;
+        if ((!x && !y) || state.time < player.ramRecoverUntil) {
+            session.ramTravel = 0;
+            return false;
+        }
+        const heading = unit(x, y);
+        if (!session.ramHeading || dot(heading, session.ramHeading) < 0.75) session.ramTravel = 0;
+        session.ramHeading = heading;
         const move = walkDelta(x, y, dt);
-        moveActor(player, move.x, move.y);
+        const before = { x: player.x, y: player.y };
+        const hit = moveActor(player, move.x, move.y);
+        const speed = hit ? Math.max(0, -(move.x * hit.nx + move.y * hit.ny) / dt) : 0;
+        if (hit?.actor && session.ramTravel >= ramRunUp && speed >= ramSpeed)
+            ram(session, hit, speed);
+        else if (!hit)
+            session.ramTravel = Math.min(ramRunUp, session.ramTravel + distance(before, player));
+        else session.ramTravel = 0;
         if (!session.swing) aim(session, { x: player.x + x, y: player.y + y });
         return true;
     }
-    function hurtPlayer(session, rock, hit, speed) {
+    function ram(session, hit, speed) {
+        const { actor: other } = hit;
+        const receiver = playerSessions.get(other);
+        if (!receiver && !other.polygon) return;
+        const { player } = session;
+        const direction = { x: -hit.nx, y: -hit.ny };
+        const ore = other.polygon ? other.id : (pickaxes[session.level].ore ?? 'stone');
+        player.ramRecoverUntil = state.time + ramRecoilMs;
+        player.impactOre = ore;
+        session.ramTravel = 0;
+        kick(player, { x: -direction.x, y: -direction.y }, speed * 0.62, 0.65);
+        if (receiver) {
+            hurtPlayer(receiver, player, hit, speed, ore, true);
+            return;
+        }
+        mark('slam', hit.x, hit.y, ore, { direction, strength: 1.1, z: 9 });
+        tagRam(other, session);
+        kick(other, direction, (speed * 0.92) / Math.sqrt(impactMass(other)), 1.1);
+        fractureOnImpact(session, other, hit, direction);
+    }
+    function hurtPlayer(session, source, hit, speed, ore = source.id, bodyHit = false) {
         const player = session.player;
         if (!player.hp || state.time - player.hurtAt < 650) return;
         player.hurtAt = state.time;
+        if (bodyHit) player.ramRecoverUntil = state.time + ramRecoilMs;
         player.hp--;
         session.stats.hitsTaken++;
         const direction = { x: -hit.nx, y: -hit.ny };
-        const strength = rock.boss ? 1.28 : 1.05;
-        player.impactOre = rock.id;
+        const strength = source.boss ? 1.28 : 1.05;
+        player.impactOre = ore;
         kick(player, direction, 100 + speed * 0.68, strength);
-        mark('hurt', hit.x, hit.y, rock.id, { direction, strength, z: 10 });
+        mark('hurt', hit.x, hit.y, ore, { direction, strength, z: 10 });
         const recoil = { x: -direction.x, y: -direction.y };
-        kick(rock, recoil, (speed * 0.26) / impactMass(rock), 0.38);
+        if (!bodyHit) kick(source, recoil, (speed * 0.26) / impactMass(source), 0.38);
         if (!player.hp) {
             player.deadAt = state.time;
             player.respawnAt = state.time + playerRespawnMs;
@@ -888,7 +951,9 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             session.moving = false;
             session.message = '쓰러졌어요. 잠시 뒤 다른 채굴터에서 다시 시작해요.';
         } else {
-            session.message = '돌진에 맞았어요. 예고 방향 옆으로 피해 보세요.';
+            session.message = bodyHit
+                ? '다른 광부와 부딪혔어요.'
+                : '돌진에 맞았어요. 예고 방향 옆으로 피해 보세요.';
         }
     }
     function revive(session) {
@@ -901,6 +966,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             respawnAt: null,
             spawnRevision: player.spawnRevision + 1,
             hurtAt: state.time,
+            ramRecoverUntil: 0,
             kickX: 0,
             kickY: 0,
             impact: null,
@@ -1055,6 +1121,8 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
         }
         if (relocated) refreshChunks();
         stepMobs(dt);
+        for (const { session, action } of impactFractures) applyFracture(session, action);
+        impactFractures.length = 0;
         for (const session of participants.values()) {
             if (!session.player.hp) continue;
             if (

@@ -15,7 +15,7 @@ export function createMovementPrediction(Rapier, serverTickRate = tickRate) {
     const obstacles = new Map();
     const player = { x: 0, y: 0 };
     physics.add(player, playerRadius);
-    let bounds, frameAt, limit;
+    let bounds, time, frameAt, limit;
     let pending = [];
     let acknowledged = { x: 0, y: 0 };
     let held = acknowledged;
@@ -61,7 +61,8 @@ export function createMovementPrediction(Rapier, serverTickRate = tickRate) {
         });
     }
     function step() {
-        if (player.hp === 0 || (!held.x && !held.y)) return;
+        time += tickMs;
+        if (player.hp === 0 || time < (player.ramRecoverUntil ?? 0) || (!held.x && !held.y)) return;
         move(held.x, held.y, tickMs / 1000);
         const length = Math.hypot(held.x, held.y);
         player.faceX = held.x / length;
@@ -89,7 +90,12 @@ export function createMovementPrediction(Rapier, serverTickRate = tickRate) {
         const { x, y } = player;
         const elapsed = Math.max(0, Math.min(tickMs, Math.min(now, limit) - frameAt));
         const input = pending.at(-1) ?? held;
-        if (player.hp === 0 || (!input.x && !input.y) || elapsed < clockToleranceMs)
+        if (
+            player.hp === 0 ||
+            time + elapsed < (player.ramRecoverUntil ?? 0) ||
+            (!input.x && !input.y) ||
+            elapsed < clockToleranceMs
+        )
             return { x, y };
         move(input.x, input.y, elapsed / 1000);
         const display = { x: player.x, y: player.y };
@@ -137,6 +143,7 @@ export function createMovementPrediction(Rapier, serverTickRate = tickRate) {
             updateColliders(state);
             Object.assign(player, state.player);
             physics.sync(player);
+            time = state.time;
             limit = now + maxLeadMs;
             const replayMs = pending.length ? clamp(now - pending[0].at, 0, maxLeadMs) : 0;
             frameAt = now - replayMs - (pending.length ? tickMs : 0);

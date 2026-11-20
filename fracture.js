@@ -267,8 +267,8 @@ function refresh(state) {
             ? '연결이 끊겼어요. 다시 연결해 주세요.'
             : state.message) ||
             (touchScreen.matches
-                ? '왼쪽은 이동 · 오른쪽 버튼은 가까운 몹 공격'
-                : 'WASD로 이동 · 클릭해 가까운 몹 공격'),
+                ? '왼쪽 스틱으로 속도를 붙여 들이받기 · 오른쪽은 곡괭이'
+                : 'WASD로 속도를 붙여 들이받기 · 클릭은 곡괭이'),
     );
     if (online && online.info().phase === 'online') {
         const { channelId } = online.info();
