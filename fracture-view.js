@@ -481,7 +481,8 @@ export function createFractureView(canvas, touchControls) {
         const y0 = Math.max(0, (turned ? u0 : v0) / tilt);
         const x1 = Math.min(bounds.width, turned ? bounds.width - v0 : u1);
         const y1 = Math.min(bounds.height, (turned ? u1 : v1) / tilt);
-        const density = Math.max(1, Math.min(2, scale * layout.dpr));
+        // Changing the frame buffer scale must not invalidate all visible ground tiles at once.
+        const density = Math.max(1, Math.min(2, scale * Math.min(2, devicePixelRatio || 1)));
         const tileLayout = `${turned}:${bounds.width}:${bounds.height}:${density}`;
         if (tileLayout !== groundTileLayout) {
             groundTiles.clear();
@@ -777,7 +778,7 @@ export function createFractureView(canvas, touchControls) {
         faceMemory.set(ore, next);
         return next;
     }
-    function mobFace(ore, time, pal, toWorld, { P, zAt }) {
+    function mobFace(ore, time, pal, toWorld, { P, zAt }, still = false) {
         const face = faceOnCap(ore, time);
         const world = toWorld(face.spot);
         const p = P(world, zAt(world) + 0.5);
@@ -789,12 +790,13 @@ export function createFractureView(canvas, touchControls) {
             y: world.y + Math.sin(facing),
         });
         const ground = project(world);
-        const gaze = Math.max(-1, Math.min(1, ahead.x - ground.x));
+        const gaze = still ? 0 : Math.max(-1, Math.min(1, ahead.x - ground.x));
         const tense = ore.stage === 'warn' || ore.stage === 'charge';
         const stunned = ore.stage === 'recover';
         const reactAge = time - face.faceHitAt;
         const expression = reactAge < 95 ? 0.18 : reactAge < 245 ? 0.53 : 0.38;
-        const blink = !tense && (time + (hashText(ore.uid ?? ore.id) % 2600)) % 2600 < 115;
+        const blink =
+            !still && !tense && (time + (hashText(ore.uid ?? ore.id) % 2600)) % 2600 < 115;
         const y = p.y - s * 0.18;
         for (const side of [-1, 1]) {
             const x = p.x + (side * 0.46 + gaze * 0.2) * s;
@@ -865,14 +867,16 @@ export function createFractureView(canvas, touchControls) {
     }
 
     const rockBodyCache = new WeakMap();
+    // Pristine distant rocks share the same tier silhouette and a neutral face.
+    const distantRockCache = new Map();
     // Rasterize newly visible bodies gradually so entering a crowded area stays responsive.
     const maxRockBakesPerFrame = 4;
     let rockBakes = 0;
 
-    function cacheBody(ore, anchor, details, height, options) {
+    function cacheBody(ore, anchor, details, height, options, distantKey) {
         const density = Math.max(1, layout.scale * Math.min(2, devicePixelRatio || 1));
         const angle = ore.angle ?? 0;
-        const cached = rockBodyCache.get(ore);
+        const cached = distantKey ? distantRockCache.get(distantKey) : rockBodyCache.get(ore);
         if (
             cached?.polygon === details.local &&
             cached.cracks === ore.cracks &&
@@ -908,7 +912,7 @@ export function createFractureView(canvas, touchControls) {
         let shape;
         try {
             ctx = surface;
-            shape = boulder({ ...source, face: undefined });
+            shape = boulder(distantKey ? source : { ...source, face: undefined });
         } finally {
             ctx = mainContext;
         }
@@ -920,25 +924,44 @@ export function createFractureView(canvas, touchControls) {
             turned: layout.turned,
             density,
             image,
+            radius: ore.r,
             left,
             top,
             width: width / density,
             height: heightPx / density,
             cap: shape.cap.map((p) => ({ x: p.x - anchor.x, y: p.y - anchor.y })),
         };
-        rockBodyCache.set(ore, record);
+        if (distantKey) distantRockCache.set(distantKey, record);
+        else rockBodyCache.set(ore, record);
         return record;
     }
 
     function rock(ore, state) {
         const color = minerals[ore.id];
         const pal = STONE[ore.id] ?? STONE.plain;
-        const detail = rockDetail(ore);
-        const local = detail.local;
         const age = state.time - (ore.lastHit ?? -Infinity);
         const bodyRecoil = recoil(ore.impact, state.time, 4.8);
         if (!ore.impact && age >= 0 && age < 120)
             bodyRecoil.x = Math.sin(age / 10) * 2 * (1 - age / 120);
+        const nearby = Math.hypot(state.player.x - ore.x, state.player.y - ore.y) < 140;
+        const anchor = project(ore);
+        const distantKey =
+            !nearby &&
+            !ore.boss &&
+            ore.geometryRevision === 0 &&
+            ore.stage === 'roam' &&
+            !bodyRecoil.x &&
+            !bodyRecoil.y &&
+            (age < 0 || age >= 90)
+                ? ore.id + ':' + layout.turned
+                : null;
+        const distant = distantRockCache.get(distantKey);
+        if (distant) {
+            drawDistantRock(distant, anchor, ore.r);
+            return;
+        }
+        const detail = rockDetail(ore);
+        const local = detail.local;
         const cos = Math.cos(ore.angle ?? 0),
             sin = Math.sin(ore.angle ?? 0);
         const toWorld = (v) => ({
@@ -994,15 +1017,18 @@ export function createFractureView(canvas, touchControls) {
                     return P(w, zAt(w) + 1);
                 });
             },
-            face: (surface) => mobFace(ore, state.time, pal, toWorld, surface),
+            face: (surface) => mobFace(ore, state.time, pal, toWorld, surface, Boolean(distantKey)),
         });
         const center = toWorld(detail.center);
-        const anchor = project(ore);
         const active =
             state.breaking?.target === ore ||
             state.breakingOthers?.some((entry) => entry.target === ore);
         const stable = !active && !bodyRecoil.x && !bodyRecoil.y && (age < 0 || age >= 90);
-        const body = stable ? cacheBody(ore, anchor, detail, H, options) : null;
+        const body = stable ? cacheBody(ore, anchor, detail, H, options, distantKey) : null;
+        if (body && distantKey) {
+            drawDistantRock(body, anchor, ore.r);
+            return;
+        }
         if (!body) boulder(options());
         else {
             ctx.drawImage(
@@ -1037,7 +1063,6 @@ export function createFractureView(canvas, touchControls) {
             });
             ctx.restore();
         }
-        const nearby = Math.hypot(state.player.x - ore.x, state.player.y - ore.y) < 140;
         if (!nearby && !ore.boss) return;
         const badge = project(center, Math.min(52, R * 0.47 + 21));
         const armed = ore.cracks?.some((crack) => crack.armed);
@@ -1052,6 +1077,16 @@ export function createFractureView(canvas, touchControls) {
         );
         if (nearby && state.level < color.tier)
             label(ctx, pickaxes[color.tier].name + ' 필요', badge.x, badge.y + 17, 11, '#ffedbd');
+    }
+    function drawDistantRock(body, anchor, radius) {
+        const scale = radius / body.radius;
+        ctx.drawImage(
+            body.image,
+            anchor.x + body.left * scale,
+            anchor.y + body.top * scale,
+            body.width * scale,
+            body.height * scale,
+        );
     }
     function longestEdge(points) {
         let best = 0,
@@ -1707,7 +1742,8 @@ export function createFractureView(canvas, touchControls) {
     function addActors(items, kind, margin) {
         for (const item of items) {
             const p = project(item);
-            if (isVisible(p, margin + (item.z ?? 0))) actors.push({ a: item, kind, p });
+            const padding = margin ?? item.r * 1.35 + 18;
+            if (isVisible(p, padding + (item.z ?? 0))) actors.push({ a: item, kind, p });
         }
     }
 
@@ -1717,19 +1753,25 @@ export function createFractureView(canvas, touchControls) {
         measure(state);
         shakeCamera(state);
         const { w, h, dpr, scale, ox, oy } = layout;
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        const ground = ctx.createRadialGradient(
-            w * 0.49,
-            h * 0.43,
-            25,
-            w * 0.49,
-            h * 0.52,
-            Math.max(w, h) * 0.72,
-        );
-        ground.addColorStop(0, '#577e59');
-        ground.addColorStop(1, '#2d4a37');
-        ctx.fillStyle = ground;
-        ctx.fillRect(0, 0, w, h);
+        const worldW = layout.turned ? layout.bounds.height * tilt : layout.bounds.width;
+        const worldH = layout.turned ? layout.bounds.width : layout.bounds.height * tilt;
+        const coversScreen =
+            ox <= 0 && oy <= 0 && ox + worldW * scale >= w && oy + worldH * scale >= h;
+        if (!state.bounds || !coversScreen) {
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            const ground = ctx.createRadialGradient(
+                w * 0.49,
+                h * 0.43,
+                25,
+                w * 0.49,
+                h * 0.52,
+                Math.max(w, h) * 0.72,
+            );
+            ground.addColorStop(0, '#577e59');
+            ground.addColorStop(1, '#2d4a37');
+            ctx.fillStyle = ground;
+            ctx.fillRect(0, 0, w, h);
+        }
         ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * ox, dpr * oy);
         ctx.lineJoin = 'round';
         ctx.lineCap = 'round';
@@ -1746,7 +1788,7 @@ export function createFractureView(canvas, touchControls) {
         targetMarker(state.target, state.level);
         const playerScreen = project(state.player);
         actors.length = 0;
-        addActors(state.rocks, 'rock', 110);
+        addActors(state.rocks, 'rock');
         addActors(state.obstacles, 'wall', 110);
         addActors(state.shards, 'shard', 75);
         if (state.others) addActors(state.others, 'other', 125);

@@ -1010,9 +1010,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             session.moving = false;
             session.message = '쓰러졌어요. 잠시 뒤 다른 채굴터에서 다시 시작해요.';
         } else {
-            session.message = bodyHit
-                ? '다른 광부와 부딪혔어요.'
-                : '돌진에 맞았어요. 예고 방향 옆으로 피해 보세요.';
+            session.message = '돌진에 맞았어요. 예고 방향 옆으로 피해 보세요.';
         }
     }
     function revive(session) {
