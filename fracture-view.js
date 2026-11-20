@@ -326,7 +326,7 @@ export function createFractureView(canvas, touchControls) {
         layout.ox += Math.max(-2.5, Math.min(2.5, x));
         layout.oy += Math.max(-2.5, Math.min(2.5, y));
     }
-    function paintCracks(paths, map, progress, palette, active) {
+    function paintCracks(paths, map, progress, palette, active, armed = false) {
         for (const path of paths) {
             const points = path.map(map);
             const lengths = points
@@ -342,12 +342,14 @@ export function createFractureView(canvas, touchControls) {
                 remaining -= lengths[i];
             }
             if (shown.length < 2) continue;
-            line(ctx, shown, palette.cutDeep, 3);
-            if (active) line(ctx, shown, palette.veinLight, 1.1);
+            line(ctx, shown, palette.cutDeep, armed ? 5 : 3);
+            if (armed) line(ctx, shown, '#ffde82', 2.2);
+            else if (active) line(ctx, shown, palette.veinLight, 1.1);
         }
     }
     function fractureDetail(target, state, palette, map) {
-        for (const crack of target.cracks ?? []) paintCracks(crack.paths, map, 1, palette, false);
+        for (const crack of target.cracks ?? [])
+            paintCracks(crack.paths, map, 1, palette, false, crack.armed === true);
         const breaking =
             state.breaking?.target === target
                 ? state.breaking
@@ -1038,7 +1040,16 @@ export function createFractureView(canvas, touchControls) {
         const nearby = Math.hypot(state.player.x - ore.x, state.player.y - ore.y) < 140;
         if (!nearby && !ore.boss) return;
         const badge = project(center, Math.min(52, R * 0.47 + 21));
-        label(ctx, ore.boss ? '대광맥' : color.name, badge.x, badge.y, 15, color.light);
+        const armed = ore.cracks?.some((crack) => crack.armed);
+        const name = ore.boss ? '대광맥' : color.name;
+        label(
+            ctx,
+            armed ? '금 간 ' + name : name,
+            badge.x,
+            badge.y,
+            15,
+            armed ? '#ffde82' : color.light,
+        );
         if (nearby && state.level < color.tier)
             label(ctx, pickaxes[color.tier].name + ' 필요', badge.x, badge.y + 17, 11, '#ffedbd');
     }

@@ -11,6 +11,7 @@ export const onlineSize = {
 };
 export const worldCenter = { x: onlineSize.width / 2, y: onlineSize.height / 2 };
 export const onlineStarter = { x: worldCenter.x + 221, y: worldSector.height * 2 + 477 };
+const starterNeighbor = { x: 53, y: 476, region: 0, guaranteed: 0, tutorial: true };
 
 const anchors = [
     [128, 120],
@@ -46,15 +47,26 @@ export function sectorSlots(seed, sx, sy) {
             region,
             seed: Math.floor(random() * 2 ** 32),
             guaranteed: tutorial ? 0 : undefined,
+            tutorial,
         });
+        if (i === 6 && region === 0 && (sx + sy) % 2 === 0)
+            slots.push({ x: x - 106, y, region, seed: Math.floor(random() * 2 ** 32) });
     }
+    if (sx === 50 && sy === 2)
+        slots.push({
+            ...starterNeighbor,
+            x: originX + starterNeighbor.x,
+            y: originY + starterNeighbor.y,
+            seed: sectorSeed,
+        });
     if (sx === 50 && sy === 50)
         slots.push({ ...worldCenter, region: 2, seed: sectorSeed, guaranteed: 4, boss: true });
     return slots;
 }
 
 export const oreSlots = [
-    { x: 155, y: 476, region: 0, guaranteed: 0 },
+    { x: 155, y: 476, region: 0, guaranteed: 0, tutorial: true },
+    starterNeighbor,
     { x: 83, y: 348, region: 0 },
     { x: 91, y: 177, region: 0 },
     { x: 210, y: 78, region: 0 },
