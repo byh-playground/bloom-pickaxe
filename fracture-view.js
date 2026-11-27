@@ -4,6 +4,8 @@ const tilt = 0.8;
 const TAU = Math.PI * 2;
 const turf = { light: '#aac477', deep: '#88ab67', ink: '#425f46' };
 const impactShake = { cut: 0.66, split: 1.65, slam: 1.22, hurt: 2.1 };
+const finisherCameraHoldMs = 95;
+const finisherCameraReturnMs = 160;
 function ellipse(ctx, x, y, rx, ry, fill, stroke) {
     ctx.beginPath();
     ctx.ellipse(x, y, rx, ry, 0, 0, TAU);
@@ -255,8 +257,20 @@ export function createFractureView(canvas, touchControls) {
         if (viewportDirty || viewport?.dpr !== dpr) measureViewport(dpr);
         const { w, turned, worldW, worldH, top, availableH, scale } = viewport;
         const bounds = state.bounds ?? board;
-        const cameraX = turned ? state.player.y * tilt : state.player.x;
-        const cameraY = turned ? bounds.width - state.player.x : state.player.y * tilt;
+        const { player } = state;
+        const origin = player.impact?.origin;
+        const recoilAge = state.time - (player.impact?.at ?? -Infinity);
+        const lag =
+            origin && recoilAge >= 0
+                ? Math.max(
+                      0,
+                      1 - Math.max(0, recoilAge - finisherCameraHoldMs) / finisherCameraReturnMs,
+                  ) ** 2
+                : 0;
+        const x = lag ? player.x + (origin.x - player.x) * lag : player.x;
+        const y = lag ? player.y + (origin.y - player.y) * lag : player.y;
+        const cameraX = turned ? y * tilt : x;
+        const cameraY = turned ? bounds.width - x : y * tilt;
         layout = {
             ...viewport,
             bounds,
@@ -1316,8 +1330,8 @@ export function createFractureView(canvas, touchControls) {
             const paused = pausedBetween(
                 minerMotion.time,
                 time,
-                swingState?.hitAt,
-                swingState?.holdUntil,
+                player.hitstopAt,
+                player.hitstopUntil,
             );
             const dt = time - minerMotion.time - paused;
             const traveled = Math.hypot(x - minerMotion.x, y - minerMotion.y);
@@ -1356,12 +1370,7 @@ export function createFractureView(canvas, touchControls) {
         const hurt = !dead && time - (player.hurtAt ?? -Infinity) < 220;
         const kickTime =
             time -
-            pausedBetween(
-                player.impact?.at ?? time,
-                time,
-                swingState?.hitAt,
-                swingState?.holdUntil,
-            );
+            pausedBetween(player.impact?.at ?? time, time, player.hitstopAt, player.hitstopUntil);
         const kick = recoil(dead ? null : player.impact, kickTime, 5.4);
         const ink = '#3d3230';
         const boot = '#614538';
@@ -1633,7 +1642,7 @@ export function createFractureView(canvas, touchControls) {
                 bright,
             );
         }
-        if (mark.kind === 'cut' && age < 275) {
+        if ((mark.kind === 'cut' || mark.kind === 'finisher') && age < 275) {
             const t = Math.max(0, age / 275);
             const heat = 1 - t;
             const radius = 14 + (1 - heat ** 1.8) * 48;
@@ -1786,6 +1795,7 @@ export function createFractureView(canvas, touchControls) {
         ctx.save();
         if (
             mark.kind === 'cut' ||
+            mark.kind === 'finisher' ||
             mark.kind === 'clink' ||
             mark.kind === 'split' ||
             mark.kind === 'slam'

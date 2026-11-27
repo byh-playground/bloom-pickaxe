@@ -170,7 +170,7 @@ function strikeSound(mark, now) {
     }
     const strength = mark.strength ?? 0.75;
     const hard = mark.kind === 'clink';
-    const rock = mark.kind === 'cut' || mark.kind === 'split';
+    const rock = mark.kind === 'cut' || mark.kind === 'split' || mark.kind === 'finisher';
     const split = mark.kind === 'split';
     const air = mark.kind === 'swing';
     const grit = sound.createBufferSource();
@@ -217,6 +217,7 @@ function playSounds(state) {
         if (
             mark.kind === 'swing' ||
             mark.kind === 'cut' ||
+            mark.kind === 'finisher' ||
             mark.kind === 'split' ||
             mark.kind === 'clink' ||
             mark.kind === 'hurt' ||

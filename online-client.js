@@ -116,6 +116,7 @@ export function createPlayback(delayMs = playbackDelayMs, metrics) {
             players: index([state.player, ...(state.others ?? [])], byId),
             rocks: index(state.rocks, byUid),
             shards: index(state.shards, byId),
+            finishSplits: state.marks.filter((mark) => mark.kind === 'split' && mark.finisher),
         });
         if (frames.length > maximumSnapshots) previous = frames.shift();
     }
@@ -152,6 +153,26 @@ export function createPlayback(delayMs = playbackDelayMs, metrics) {
             : overdue;
         const weight = first === second ? 0 : poseTime / (second.state.time - first.state.time);
         const timing = { from: first.state.time, to: second.state.time, weight };
+        let rockSamples = first.rocks;
+        let shardSamples = first.shards;
+        let marks = first.state.marks;
+        if (timing.to > timing.from) {
+            for (const split of second.finishSplits) {
+                if (split.at <= timing.from || split.at > time) continue;
+                if (rockSamples === first.rocks) {
+                    rockSamples = new Map(rockSamples);
+                    shardSamples = new Map(shardSamples);
+                    marks = [...marks];
+                }
+                const { rockUid, firstShardId, lastShardId } = split.finisher;
+                rockSamples.delete(rockUid);
+                for (let id = firstShardId; id <= lastShardId; id++) {
+                    const shard = second.shards.get(id);
+                    if (shard) shardSamples.set(id, shard);
+                }
+                marks.push(split);
+            }
+        }
         const visible = new Set();
         const [player, ...others] = actors(
             first.players,
@@ -161,8 +182,8 @@ export function createPlayback(delayMs = playbackDelayMs, metrics) {
             byId,
             visible,
         );
-        const rocks = actors(first.rocks, second.rocks, timing, 'r:', byUid, visible);
-        const shards = actors(first.shards, second.shards, timing, 's:', byId, visible);
+        const rocks = actors(rockSamples, second.rocks, timing, 'r:', byUid, visible);
+        const shards = actors(shardSamples, second.shards, timing, 's:', byId, visible);
         for (const key of display.keys()) if (!visible.has(key)) display.delete(key);
         const actorFor = (actor) =>
             actor?.uid ? display.get('r:' + actor.uid) : display.get('s:' + actor?.id);
@@ -173,6 +194,7 @@ export function createPlayback(delayMs = playbackDelayMs, metrics) {
         return {
             ...first.state,
             time,
+            marks,
             player,
             others,
             rocks,
@@ -400,19 +422,24 @@ export function createOnlineClient(
                 scene.player.hp !== 0 &&
                 scene.player.spawnRevision === state?.player.spawnRevision;
             const swing = scene.swing?.rockUid ? scene.swing : state?.swing;
+            const finisher = (mark) =>
+                mark.kind === 'finisher' &&
+                mark.attackerId === playerId &&
+                scene.time < mark.recoilUntil;
+            const contactAt =
+                scene.marks.findLast(finisher)?.at ??
+                state?.marks.findLast(finisher)?.at ??
+                (swing?.rockUid ? swing.contactAt : undefined);
             let pose = scene.player;
-            if (canPredict && swing?.rockUid) {
+            if (canPredict && contactAt !== undefined) {
                 // Align before contact, then use one clock for the striking player and ore.
                 miningTransition ??= {
                     at: scene.time,
                     x: (displayedPlayer?.x ?? pose.x) - pose.x,
                     y: (displayedPlayer?.y ?? pose.y) - pose.y,
                 };
-                const left = Math.max(0, swing.contactAt - scene.time);
-                const blend = Math.min(
-                    1,
-                    left / Math.max(1, swing.contactAt - miningTransition.at),
-                );
+                const left = Math.max(0, contactAt - scene.time);
+                const blend = Math.min(1, left / Math.max(1, contactAt - miningTransition.at));
                 if (blend > 0) {
                     pose = {
                         ...pose,
