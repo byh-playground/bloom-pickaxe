@@ -1,12 +1,473 @@
 import { board, minerals, pickaxes, crackGrowthMs } from './fracture-world.js';
+import {
+    copperRavineCenter,
+    ironRidgeCenter,
+    onlineCopperRavineCenter,
+    onlineIronRidgeCenter,
+} from './fracture-spawn.js';
 
 const tilt = 0.8;
 const TAU = Math.PI * 2;
 const turf = { light: '#aac477', deep: '#88ab67', ink: '#425f46' };
-const impactShake = { cut: 0.66, split: 1.65, slam: 1.22, hurt: 2.1 };
+const impactShake = { cut: 0.66, split: 1.65, slam: 1.22, hurt: 2.1, collapse: 1.8 };
 const finisherCameraHoldMs = 95;
 const finisherCameraReturnMs = 160;
 const hitstopBlinkFilter = 'brightness(2.12) saturate(0.45)';
+const sceneryCell = 174;
+const scenerySpan = 92;
+
+function bakeScenery() {
+    const image = document.createElement('canvas');
+    image.width = scenerySpan * 4;
+    image.height = scenerySpan;
+    const art = image.getContext('2d');
+    art.lineWidth = 1.7;
+    art.lineJoin = 'round';
+    art.lineCap = 'round';
+    for (let i = 0; i < 4; i++) {
+        art.save();
+        art.translate(i * scenerySpan + 46, 71);
+        ellipse(art, 4, 3, 29, 10, '#334d3940');
+        if (i < 2) {
+            for (const [x, scale] of i
+                ? [
+                      [-13, 0.66],
+                      [13, 0.83],
+                  ]
+                : [
+                      [-6, 1],
+                      [18, 0.55],
+                  ]) {
+                art.save();
+                art.translate(x, 0);
+                art.scale(scale, scale);
+                polygon(
+                    art,
+                    [
+                        { x: -5, y: 0 },
+                        { x: -4, y: -29 },
+                        { x: 4, y: -29 },
+                        { x: 5, y: 0 },
+                    ],
+                    '#866047',
+                    '#4c513b',
+                );
+                const tree = [
+                    { x: 0, y: -68 },
+                    { x: 16, y: -46 },
+                    { x: 10, y: -45 },
+                    { x: 23, y: -27 },
+                    { x: 15, y: -26 },
+                    { x: 26, y: -11 },
+                    { x: 10, y: -7 },
+                    { x: -9, y: -7 },
+                    { x: -26, y: -12 },
+                    { x: -16, y: -27 },
+                    { x: -23, y: -26 },
+                    { x: -10, y: -43 },
+                    { x: -16, y: -44 },
+                ];
+                polygon(art, tree, '#3f735c', '#34594c');
+                polygon(
+                    art,
+                    [
+                        tree[0],
+                        tree[12],
+                        tree[11],
+                        tree[10],
+                        tree[9],
+                        tree[8],
+                        tree[7],
+                        { x: -3, y: -48 },
+                    ],
+                    '#5d9067',
+                );
+                line(
+                    art,
+                    [
+                        { x: -8, y: -22 },
+                        { x: 0, y: -25 },
+                        { x: 9, y: -22 },
+                    ],
+                    '#89aa6b',
+                    1.8,
+                );
+                art.restore();
+            }
+        } else if (i === 2) {
+            for (const [x, y, r] of [
+                [-18, -10, 12],
+                [0, -17, 17],
+                [17, -9, 12],
+            ]) {
+                ellipse(art, x, y, r, r * 0.75, '#56845b', '#486d53');
+                ellipse(art, x - 3, y - 4, r * 0.63, r * 0.45, '#73a265');
+            }
+            for (const [x, y] of [
+                [-21, -14],
+                [-6, -24],
+                [4, -17],
+                [17, -12],
+                [8, -7],
+            ]) {
+                ellipse(art, x, y, 2.1, 1.8, '#f0c875', '#ab8055');
+            }
+        } else {
+            for (const [x, y, r] of [
+                [-16, -4, 13],
+                [1, -12, 16],
+                [21, -4, 9],
+            ]) {
+                polygon(
+                    art,
+                    [
+                        { x: x - r, y: y + 2 },
+                        { x: x - r * 0.55, y: y - r * 0.62 },
+                        { x: x + r * 0.27, y: y - r * 0.75 },
+                        { x: x + r, y: y + 1 },
+                        { x: x + r * 0.51, y: y + 6 },
+                    ],
+                    '#797f77',
+                    '#52665b',
+                );
+                line(
+                    art,
+                    [
+                        { x: x - r * 0.5, y: y - r * 0.5 },
+                        { x: x + r * 0.22, y: y - r * 0.63 },
+                        { x: x + r * 0.59, y: y - r * 0.25 },
+                    ],
+                    '#aeb5a0',
+                    2.1,
+                );
+            }
+        }
+        art.restore();
+    }
+    return image;
+}
+
+function bakeIronRidge(turned) {
+    const image = document.createElement('canvas');
+    image.width = turned ? 418 : 548;
+    image.height = turned ? 548 : 385;
+    const ox = image.width / 2;
+    const oy = image.height / 2;
+    const art = image.getContext('2d');
+    art.lineCap = 'round';
+    art.lineJoin = 'round';
+    const p = (x, y) =>
+        turned ? { x: ox + y * tilt, y: oy - x } : { x: ox + x, y: oy + y * tilt };
+    const path = (points) => points.map(([x, y]) => p(x, y));
+    line(
+        art,
+        path([
+            [-210, -208],
+            [-99, -140],
+            [-55, -84],
+            [29, 27],
+            [122, 78],
+            [179, 123],
+        ]),
+        '#a9ac91',
+        36,
+    );
+    line(
+        art,
+        path([
+            [-211, -211],
+            [-99, -143],
+            [-53, -85],
+            [31, 23],
+            [122, 78],
+            [179, 123],
+        ]),
+        '#c2bc9c',
+        15,
+    );
+    const shelf = [
+        [-239, -54],
+        [-192, -107],
+        [-109, -97],
+        [-61, -142],
+        [31, -140],
+        [113, -110],
+        [176, -120],
+        [235, -77],
+        [250, -21],
+        [188, 22],
+        [160, 94],
+        [78, 133],
+        [25, 108],
+        [-66, 143],
+        [-141, 107],
+        [-193, 50],
+        [-229, 21],
+    ];
+    polygon(art, path(shelf), '#617678');
+    polygon(art, path(shelf.map(([x, y]) => [x * 0.9, y * 0.88])), '#8da6a4');
+    polygon(
+        art,
+        path([
+            [-214, -38],
+            [-163, -89],
+            [-108, -80],
+            [-61, -121],
+            [38, -111],
+            [110, -82],
+            [188, -87],
+            [219, -64],
+            [174, -37],
+            [92, -55],
+            [44, -28],
+            [-31, -45],
+            [-112, -22],
+            [-172, -32],
+        ]),
+        '#b5c8ba',
+    );
+    polygon(
+        art,
+        path([
+            [-156, 42],
+            [-73, 17],
+            [6, 34],
+            [59, 6],
+            [131, 28],
+            [194, -16],
+            [161, 72],
+            [89, 113],
+            [23, 87],
+            [-64, 113],
+            [-111, 80],
+        ]),
+        '#789399',
+    );
+    for (const vein of [
+        [
+            [-205, -1],
+            [-128, -42],
+            [-57, -17],
+            [25, -63],
+            [102, -34],
+            [167, -52],
+        ],
+        [
+            [-158, 61],
+            [-84, 31],
+            [-18, 51],
+            [62, 15],
+            [136, 38],
+            [187, 9],
+        ],
+        [
+            [-95, 97],
+            [-38, 72],
+            [25, 86],
+            [78, 64],
+            [127, 63],
+        ],
+    ]) {
+        line(art, path(vein), '#58767c', 6);
+        line(art, path(vein.map(([x, y]) => [x, y - 3])), '#d0dcca', 2.5);
+    }
+    const random = seeded(0x1a0d23);
+    for (let i = 0; i < 75; i++) {
+        const a = random() * TAU,
+            radius = Math.sqrt(random()),
+            q = p(Math.cos(a) * radius * 207, Math.sin(a) * radius * 106);
+        line(
+            art,
+            [q, { x: q.x + 2 + random() * 5, y: q.y - 1 }],
+            i % 3 ? '#68899188' : '#dbe0c998',
+            1.6,
+        );
+    }
+    return { image, ox, oy };
+}
+const ravineOutline = [
+    [-251, -47],
+    [-222, -101],
+    [-160, -122],
+    [-105, -107],
+    [-46, -142],
+    [35, -128],
+    [104, -148],
+    [177, -123],
+    [242, -94],
+    [266, -24],
+    [222, 27],
+    [237, 70],
+    [171, 105],
+    [100, 94],
+    [55, 126],
+    [-22, 109],
+    [-68, 139],
+    [-132, 128],
+    [-192, 98],
+    [-241, 64],
+];
+
+function bakeCopperRavine(turned) {
+    const image = document.createElement('canvas');
+    image.width = turned ? 486 : 560;
+    image.height = turned ? 560 : 420;
+    const ox = image.width / 2;
+    const oy = turned ? image.height / 2 : 160;
+    const art = image.getContext('2d');
+    art.lineCap = 'round';
+    art.lineJoin = 'round';
+    const p = (x, y, z = 0) =>
+        turned ? { x: ox + y * tilt, y: oy - x - z } : { x: ox + x, y: oy + y * tilt - z };
+    const path = (points, scale = 1) => points.map(([x, y]) => p(x * scale, y * scale));
+    const a = p(-200, -100);
+    const b = p(260, 90);
+    const strata = art.createLinearGradient(a.x, a.y, b.x, b.y);
+    strata.addColorStop(0, '#624d50');
+    strata.addColorStop(0.28, '#92705e');
+    strata.addColorStop(0.67, '#b58265');
+    strata.addColorStop(1, '#a06a56');
+
+    polygon(
+        art,
+        path([
+            [-112, 270],
+            [-84, 183],
+            [-34, 107],
+            [45, 98],
+            [18, 159],
+            [-37, 205],
+            [-63, 273],
+        ]),
+        '#b9a478',
+    );
+    line(
+        art,
+        path([
+            [-89, 263],
+            [-66, 197],
+            [-15, 135],
+            [12, 113],
+        ]),
+        '#d2bc84',
+        15,
+    );
+    polygon(art, path(ravineOutline), '#647562');
+    polygon(art, path(ravineOutline, 0.94), '#67666b');
+    polygon(art, path(ravineOutline, 0.84), strata);
+    line(
+        art,
+        path([
+            [-234, 59],
+            [-171, 92],
+            [-130, 105],
+            [-71, 116],
+            [-18, 88],
+        ]),
+        '#d0a274',
+        4,
+    );
+    line(
+        art,
+        path([
+            [51, 106],
+            [102, 78],
+            [171, 87],
+            [218, 60],
+        ]),
+        '#d0a274',
+        5,
+    );
+
+    const strataLines = [
+        [
+            [-215, -29],
+            [-161, -68],
+            [-101, -73],
+            [-48, -110],
+            [12, -100],
+            [53, -122],
+        ],
+        [
+            [-165, 44],
+            [-105, 29],
+            [-52, 48],
+            [3, 26],
+            [58, 40],
+            [131, 7],
+            [203, 19],
+        ],
+        [
+            [-66, 91],
+            [-28, 60],
+            [29, 63],
+            [73, 43],
+            [130, 51],
+            [175, 38],
+        ],
+        [
+            [12, -57],
+            [62, -68],
+            [114, -47],
+            [169, -66],
+            [220, -46],
+        ],
+    ];
+    for (const seam of strataLines) {
+        line(art, path(seam), '#684c52', 7);
+        line(art, path(seam.map(([x, y]) => [x, y - 3])), '#dbad79', 2.4);
+    }
+    const rng = seeded(0xc097e2);
+    for (let i = 0; i < 90; i++) {
+        const t = rng() * TAU;
+        const r = Math.sqrt(rng()) * 0.84;
+        const x = Math.cos(t) * r * 244;
+        const y = Math.sin(t) * r * 126;
+        const size = 1 + rng() * 4;
+        const q = p(x, y);
+        polygon(
+            art,
+            [
+                { x: q.x - size, y: q.y },
+                { x: q.x + size * 0.7, y: q.y - size * 0.55 },
+                { x: q.x + size, y: q.y + size * 0.45 },
+            ],
+            i % 4 ? '#6a545766' : '#e7bd8894',
+        );
+    }
+
+    const clusters = [
+        [-188, -54, 1.3],
+        [-126, -82, 1.1],
+        [-32, -92, 0.85],
+        [76, -97, 1.15],
+        [163, -75, 0.92],
+        [221, -56, 0.8],
+        [-158, 74, 0.84],
+        [89, 62, 0.92],
+        [191, 54, 1.15],
+    ];
+    for (const [x, y, size] of clusters) {
+        const q = p(x, y);
+        ellipse(art, q.x + 6, q.y + 4, 19 * size, 8 * size, '#4d4c57a6');
+        for (const [dx, rise] of [
+            [-10, 15],
+            [0, 25],
+            [10, 17],
+        ]) {
+            const base = q.x + dx * size;
+            const top = q.y - rise * size;
+            const left = { x: base - 7 * size, y: q.y };
+            const tip = { x: base + 2 * size, y: top };
+            const right = { x: base + 7 * size, y: q.y - 1 };
+            const crease = { x: base + 2 * size, y: q.y + 2 * size };
+            polygon(art, [left, tip, right, crease], '#506e68', '#514854');
+            polygon(art, [left, tip, crease], '#78a08e');
+            line(art, [left, tip], '#b3c9a0', 1.2);
+        }
+    }
+    return { image, ox, oy };
+}
 
 function hitstopBlink(time, actor) {
     const start = actor.blinkAt ?? actor.hitstopAt;
@@ -129,6 +590,11 @@ const STONE = {
     ),
     plain: stonePalette('#8d907f', null),
 };
+const guardianPalette = stonePalette('#766867', {
+    color: '#d98b54',
+    light: '#ffe698',
+    dark: '#935441',
+});
 function seeded(seed) {
     let s = seed >>> 0 || 1;
     return () => {
@@ -265,8 +731,9 @@ export function createFractureView(canvas, touchControls) {
             Math.min(2, devicePixelRatio || 1) * backingScales[qualityLevel],
         );
         if (viewportDirty || viewport?.dpr !== dpr) measureViewport(dpr);
-        const { w, turned, worldW, worldH, top, availableH, scale } = viewport;
+        const { w, h, turned, worldW, worldH, top, availableH, scale: baseScale } = viewport;
         const bounds = state.bounds ?? board;
+        const scale = state.bounds && w >= 900 && h >= 540 ? baseScale * 1.26 : baseScale;
         const { player } = state;
         const origin = player.impact?.origin;
         const recoilAge = state.time - (player.impact?.at ?? -Infinity);
@@ -283,6 +750,7 @@ export function createFractureView(canvas, touchControls) {
         const cameraY = turned ? bounds.width - x : y * tilt;
         layout = {
             ...viewport,
+            scale,
             bounds,
             ox: state.bounds ? w / 2 - cameraX * scale : (w - worldW * scale) / 2,
             oy: state.bounds
@@ -450,7 +918,27 @@ export function createFractureView(canvas, touchControls) {
                 p.x += groundMargin - start.x;
                 p.y += groundMargin - start.y;
                 const kind = (hash >>> 10) % 16;
-                if (kind < 7) {
+                if (kind < 2) {
+                    ellipse(tileCtx, p.x, p.y, 17 + (hash % 7), 9, '#8da55c47');
+                    line(
+                        tileCtx,
+                        [
+                            { x: p.x - 2, y: p.y + 2 },
+                            { x: p.x - 6, y: p.y - 5 },
+                        ],
+                        '#d4b972',
+                        1.7,
+                    );
+                    line(
+                        tileCtx,
+                        [
+                            { x: p.x + 1, y: p.y + 2 },
+                            { x: p.x + 4, y: p.y - 6 },
+                        ],
+                        '#e0cc87',
+                        1.7,
+                    );
+                } else if (kind < 7) {
                     ellipse(tileCtx, p.x, p.y, 3 + (hash % 3), 1.6, '#55794c3b');
                 } else if (kind < 13) {
                     line(
@@ -528,6 +1016,75 @@ export function createFractureView(canvas, touchControls) {
                 ctx.drawImage(tile.image, tile.x, tile.y, tile.width, tile.height);
             }
         }
+    }
+    const landmarks = [
+        [copperRavineCenter, onlineCopperRavineCenter, bakeCopperRavine, new Map()],
+        [ironRidgeCenter, onlineIronRidgeCenter, bakeIronRidge, new Map()],
+    ];
+    function paintLandmark(state, [local, online, bake, cache]) {
+        const anchor = project(state.bounds ? online : local);
+        if (!isVisible(anchor, 330)) return;
+        const turned = layout.turned;
+        let art = cache.get(turned);
+        if (!art) {
+            art = bake(turned);
+            cache.set(turned, art);
+        }
+        ctx.drawImage(art.image, anchor.x - art.ox, anchor.y - art.oy);
+    }
+    let sceneryArt;
+    function collectScenery(state) {
+        const { w, h, ox, oy, scale, turned, bounds } = layout;
+        const minU = -ox / scale;
+        const minV = -oy / scale;
+        const maxU = (w - ox) / scale;
+        const maxV = (h - oy) / scale;
+        const fromX = turned ? bounds.width - maxV : minU;
+        const toX = turned ? bounds.width - minV : maxU;
+        const fromY = (turned ? minU : minV) / tilt;
+        const toY = (turned ? maxU : maxV) / tilt;
+        const copper = state.bounds ? onlineCopperRavineCenter : copperRavineCenter;
+        const iron = state.bounds ? onlineIronRidgeCenter : ironRidgeCenter;
+        for (
+            let iy = Math.max(0, Math.floor(fromY / sceneryCell) - 1);
+            iy <= Math.floor(toY / sceneryCell) + 1;
+            iy++
+        ) {
+            for (
+                let ix = Math.max(0, Math.floor(fromX / sceneryCell) - 1);
+                ix <= Math.floor(toX / sceneryCell) + 1;
+                ix++
+            ) {
+                const hash = hashPoint(ix * 13, iy * 13 + 711);
+                if (((hash >>> 3) & 3) === 0) continue;
+                const x = ix * sceneryCell + 24 + ((hash >>> 9) & 95);
+                const y = iy * sceneryCell + 24 + ((hash >>> 18) & 95);
+                if (x > bounds.width - 45 || y > bounds.height - 55) continue;
+                if (Math.abs(x - copper.x) < 255 && Math.abs(y - copper.y) < 154) continue;
+                if (Math.abs(x - iron.x) < 237 && Math.abs(y - iron.y) < 130) continue;
+                const p = project({ x, y });
+                if (isVisible(p, 61))
+                    actors.push({
+                        p,
+                        kind: 'scenery',
+                        a: { sprite: (hash >>> 5) & 3, tone: 0.76 + ((hash >>> 26) & 7) * 0.045 },
+                    });
+            }
+        }
+    }
+    function drawScenery({ sprite, tone }, p) {
+        sceneryArt ??= bakeScenery();
+        ctx.drawImage(
+            sceneryArt,
+            sprite * scenerySpan,
+            0,
+            scenerySpan,
+            scenerySpan,
+            p.x - 46 * tone,
+            p.y - 71 * tone,
+            scenerySpan * tone,
+            scenerySpan * tone,
+        );
     }
     // 바위 한 덩어리: 윤곽 = 실제 polygon(rimZ 평면), 아래로 옆면, 안쪽으로 솟은 돔.
     function boulder(o) {
@@ -809,6 +1366,7 @@ export function createFractureView(canvas, touchControls) {
         return next;
     }
     function mobFace(ore, time, pal, toWorld, { P, zAt }, still = false) {
+        if (ore.guardian) return;
         const face = faceOnCap(ore, time);
         const world = toWorld(face.spot);
         const p = P(world, zAt(world) + 0.5);
@@ -984,7 +1542,7 @@ export function createFractureView(canvas, touchControls) {
 
     function rock(ore, state) {
         const color = minerals[ore.id];
-        const pal = STONE[ore.id] ?? STONE.plain;
+        const pal = ore.guardian ? guardianPalette : (STONE[ore.id] ?? STONE.plain);
         const time = state.time;
         const blink = hitstopBlink(time, ore);
         const age = time - (ore.lastHit ?? -Infinity);
@@ -997,16 +1555,25 @@ export function createFractureView(canvas, touchControls) {
             bodyRecoil.x = Math.sin(age / 10) * 2 * (1 - age / 120);
         const nearby = Math.hypot(state.player.x - ore.x, state.player.y - ore.y) < 140;
         const anchor = project(ore);
+        if (ore.guardian)
+            drawGuardianLegs(
+                anchor,
+                ore.r,
+                state.time,
+                ore.stage === 'charge',
+                ore.lode === 'iron',
+            );
         const distantKey =
             !blink &&
             !nearby &&
             !ore.boss &&
+            !ore.guardian &&
             ore.geometryRevision === 0 &&
             ore.stage === 'roam' &&
             !bodyRecoil.x &&
             !bodyRecoil.y &&
             (age < 0 || age >= 90)
-                ? ore.id + ':' + layout.turned
+                ? ore.id + ':' + ore.polygon.length + ':' + layout.turned
                 : null;
         const distant = distantRockCache.get(distantKey);
         if (distant) {
@@ -1031,6 +1598,7 @@ export function createFractureView(canvas, touchControls) {
             H,
             k: rockCapScale,
             palette: pal,
+            outline: ore.guardian ? 3.2 : 2.45,
             blink,
             recoil: bodyRecoil,
             flash: age >= 0 && age < 90 ? (1 - age / 90) ** 2 * 0.4 : 0,
@@ -1065,6 +1633,14 @@ export function createFractureView(canvas, touchControls) {
                     const q = P(w, zAt(w));
                     ellipse(ctx, q.x, q.y + 0.5, 4.5 * cr.s, 2 * cr.s, pal.deep + '88');
                     crystalTuft(q.x, q.y, cr.s, cr.tilt, cr.count, pal);
+                }
+                if (ore.lode && !ore.guardian) {
+                    const crest = toWorld({
+                        x: detail.center.x - R * 0.15,
+                        y: detail.center.y - R * 0.31,
+                    });
+                    const tip = P(crest, zAt(crest));
+                    drawOreCrest(tip, Math.min(1.15, R / 36), ore.lode === 'iron', pal);
                 }
                 fractureDetail(ore, state, pal, (p) => {
                     const w = toWorld(p);
@@ -1118,20 +1694,169 @@ export function createFractureView(canvas, touchControls) {
             });
             ctx.restore();
         }
-        if (!nearby && !ore.boss) return;
-        const badge = project(center, Math.min(52, R * 0.47 + 21));
+        if (ore.guardian) {
+            guardianCrown(
+                project(center, FACE_Z + H),
+                R,
+                bodyRecoil,
+                blink,
+                ore.stage === 'warn' || ore.stage === 'charge',
+            );
+        }
+        const selected = state.target?.actor === ore;
+        const charging = ore.stage === 'warn' || ore.stage === 'charge';
+        if (!selected && !ore.boss && !(ore.guardian && (nearby || charging))) return;
+        const badge = project(
+            center,
+            ore.guardian ? FACE_Z + H + Math.min(49, R * 0.82) : Math.min(52, R * 0.47 + 21),
+        );
         const armed = ore.cracks?.some((crack) => crack.armed);
-        const name = ore.boss ? '대광맥' : color.name;
+        const name = ore.guardian ? color.name + ' 수호석' : ore.boss ? '대광맥' : color.name;
+        if (ore.guardian && (nearby || selected || charging)) {
+            const meter = 46;
+            ctx.fillStyle = '#362a2e';
+            ctx.fillRect(badge.x - meter / 2 - 2, badge.y - 23, meter + 4, 8);
+            ctx.fillStyle = charging ? '#ff7769' : '#ffc76a';
+            ctx.fillRect(badge.x - meter / 2, badge.y - 21, armed ? meter / 2 : meter, 4);
+        }
         label(
             ctx,
             armed ? '금 간 ' + name : name,
             badge.x,
             badge.y,
-            15,
+            selected || ore.guardian ? 18 : 15,
             armed ? '#ffde82' : color.light,
         );
         if (nearby && state.level < color.tier)
             label(ctx, pickaxes[color.tier].name + ' 필요', badge.x, badge.y + 17, 11, '#ffedbd');
+    }
+    function drawGuardianLegs(point, radius, time, charging, iron) {
+        ctx.save();
+        ctx.translate(point.x, point.y);
+        const strut = iron ? '#7aaaba' : '#bc8256';
+        const joint = iron ? '#c0effb' : '#ffc774';
+        const pace = time / (charging ? 54 : 132);
+        for (const side of [-1, 1]) {
+            for (let i = 0; i < 2; i++) {
+                const step = Math.sin(pace + i * Math.PI + side);
+                const x = side * radius * (0.76 + i * 0.11);
+                const y = 4 + i * 9;
+                const knee = { x: x + side * (15 + step * 5), y: y + 2 };
+                const foot = { x: knee.x + side * 5, y: y + 16 - step * (charging ? 8 : 4) };
+                const points = [{ x, y: y - 6 }, knee, foot];
+                line(ctx, points, '#323039', 12);
+                line(ctx, points, strut, 7);
+                ellipse(ctx, foot.x, foot.y + 2, 7, 3, '#302c36');
+                ellipse(ctx, knee.x, knee.y, 3.2, 2.6, joint);
+            }
+        }
+        ctx.restore();
+    }
+    function drawOreCrest(point, scale, iron, pal) {
+        ctx.save();
+        ctx.translate(point.x, point.y);
+        ctx.scale(scale, scale);
+        ctx.lineWidth = 2.3;
+        const peaks = iron
+            ? [
+                  [-12, 16],
+                  [2, 25],
+                  [14, 13],
+              ]
+            : [
+                  [-8, 16],
+                  [7, 25],
+              ];
+        for (const [x, h] of peaks) {
+            const tip = x + (iron ? 3 : -4);
+            const body = [
+                { x: x - 6, y: 0 },
+                { x: x - 5, y: -h * 0.6 },
+                { x: tip, y: -h },
+                { x: x + 7, y: -h * 0.56 },
+                { x: x + 5, y: 0 },
+            ];
+            polygon(ctx, body, pal.vein, pal.veinDark);
+            polygon(ctx, [body[1], body[2], body[3], { x, y: -h * 0.37 }], pal.veinLight);
+        }
+        ctx.restore();
+    }
+    function guardianCrown(point, radius, recoil, blink, tense) {
+        const size = Math.min(1, radius / 41);
+        ctx.save();
+        if (blink) ctx.filter = hitstopBlinkFilter;
+        ctx.translate(point.x + recoil.x, point.y + recoil.y);
+        ctx.scale(size, size);
+        ctx.lineWidth = 2.4;
+        polygon(
+            ctx,
+            [
+                { x: -24, y: 3 },
+                { x: -16, y: 0 },
+                { x: 0, y: 6 },
+                { x: 16, y: 0 },
+                { x: 24, y: 4 },
+                { x: 19, y: 19 },
+                { x: 0, y: 26 },
+                { x: -19, y: 19 },
+            ],
+            '#52413f',
+            '#bb895f',
+        );
+        for (const side of [-1, 1]) {
+            ellipse(ctx, side * 11, 11, 5.8, 4, '#312829');
+            ellipse(ctx, side * 11, 10.5, 3.8, 2.1, tense ? '#fff6a5' : '#efa551');
+        }
+        polygon(
+            ctx,
+            [
+                { x: 0, y: 5 },
+                { x: 3.8, y: 10 },
+                { x: 0, y: 15 },
+                { x: -3.8, y: 10 },
+            ],
+            tense ? '#ffef8c' : '#ffd569',
+        );
+        line(
+            ctx,
+            [
+                { x: -6, y: 19 },
+                { x: 0, y: 17 },
+                { x: 6, y: 19 },
+            ],
+            '#32272c',
+            2.1,
+        );
+        for (const [x, y, h, sway] of [
+            [-25, -7, 20, -9],
+            [25, -7, 20, 9],
+            [0, -10, 31, 0],
+        ]) {
+            const crown = [
+                { x: x - 8, y: y + 3 },
+                { x: x - 9, y: y - h * 0.38 },
+                { x: x + sway, y: y - h },
+                { x: x + 8, y: y - h * 0.42 },
+                { x: x + 9, y: y + 1 },
+                { x: x, y: y + 5 },
+            ];
+            polygon(ctx, crown, '#c26a4a', '#58413f');
+            polygon(
+                ctx,
+                [crown[0], crown[1], crown[2], { x: x - 1, y: y - h * 0.38 }, crown[5]],
+                '#ffd77d',
+            );
+            line(
+                ctx,
+                [
+                    { x: x + sway * 0.46, y: y - h * 0.48 },
+                    { x: x + sway, y: y - h + 3 },
+                ],
+                '#ffedb2',
+                2.3,
+            );
+        }
+        ctx.restore();
     }
     function drawDistantRock(body, anchor, radius) {
         const scale = radius / body.radius;
@@ -1179,16 +1904,24 @@ export function createFractureView(canvas, touchControls) {
             ctx.globalAlpha = Math.max(0, Math.min(1, (piece.expiresAt - state.time) / 350));
         if (piece.collectible && air < 2) {
             const g = project(piece);
-            ctx.lineWidth = 1.4;
-            ellipse(
-                ctx,
-                g.x,
-                g.y + 3,
-                Math.max(10, R * 0.95),
-                Math.max(5, R * 0.42),
-                null,
-                '#fff3c899',
-            );
+            const tone = minerals[piece.ore].light;
+            ctx.lineWidth = 2.1;
+            if (piece.ore !== 'stone') {
+                ctx.globalAlpha = 0.27;
+                ellipse(ctx, g.x, g.y + 4, Math.max(15, R * 1.2), Math.max(7, R * 0.54), tone);
+                ctx.globalAlpha = 0.83;
+                line(
+                    ctx,
+                    [
+                        { x: g.x, y: g.y - 12 },
+                        { x: g.x, y: g.y - 38 },
+                    ],
+                    tone,
+                    2.6,
+                );
+                ctx.globalAlpha = 1;
+            }
+            ellipse(ctx, g.x, g.y + 3, Math.max(10, R * 0.95), Math.max(5, R * 0.42), null, tone);
         }
         boulder({
             points,
@@ -1313,9 +2046,11 @@ export function createFractureView(canvas, touchControls) {
             ctx.stroke(minerArt[id]);
         }
     }
-    function avatar(player, level, time, swingState, name = '나', labelLift = 0) {
+    function avatar(player, level, time, swingState, name = '나', labelLift = 0, attackPreview) {
         const { x, y } = project(player);
-        const facing = screenDirection({ x: player.faceX, y: player.faceY });
+        const facing = screenDirection(
+            attackPreview?.facing ?? { x: player.faceX, y: player.faceY },
+        );
         const dead = player.hp === 0 && Number.isFinite(player.deadAt);
         const deathAge = dead ? Math.max(0, time - player.deadAt) : 0;
         const deathLength = dead
@@ -1385,7 +2120,10 @@ export function createFractureView(canvas, touchControls) {
             landed && swingAge > 37 && swingAge < 160
                 ? Math.sin((Math.PI * (swingAge - 37)) / 123)
                 : 0;
-        const load = swingAge < 0 ? Math.max(0, Math.sin(Math.PI * windup)) : 0;
+        const load = Math.max(
+            attackPreview?.load ?? 0,
+            swingAge < 0 ? Math.sin(Math.PI * windup) : 0,
+        );
         const hurt = !dead && time - (player.hurtAt ?? -Infinity) < 220;
         const kickTime =
             time -
@@ -1508,7 +2246,21 @@ export function createFractureView(canvas, touchControls) {
                 1.35,
             );
 
-        minerPart('shell', '#efb63d', ink, 2.25);
+        const localMiner = name === '나';
+        if (!localMiner)
+            polygon(
+                ctx,
+                [
+                    { x: -12, y: -49 },
+                    { x: -23, y: -59 },
+                    { x: -24, y: -67 },
+                    { x: -16, y: -63 },
+                    { x: -8, y: -57 },
+                ],
+                '#ea927d',
+                ink,
+            );
+        minerPart('shell', localMiner ? '#efb63d' : '#68bcb2', ink, 2.55);
         line(
             ctx,
             [
@@ -1516,7 +2268,7 @@ export function createFractureView(canvas, touchControls) {
                 { x: -10, y: -52 },
                 { x: -4, y: -54 },
             ],
-            '#ffe397',
+            localMiner ? '#ffe397' : '#baf4e1',
             2.7,
         );
         line(
@@ -1529,7 +2281,7 @@ export function createFractureView(canvas, touchControls) {
             '#a96c28',
             2,
         );
-        minerPart('brim', '#fac650', ink);
+        minerPart('brim', localMiner ? '#fac650' : '#7ed5c5', ink);
         ctx.lineWidth = 2;
         ellipse(ctx, 10, -45, 7.8, 7.2, '#635744', ink);
         ellipse(ctx, 10, -45, 4.8, 4.5, lamp, '#c09548');
@@ -1543,12 +2295,14 @@ export function createFractureView(canvas, touchControls) {
         ctx.translate(hand.x, hand.y);
         const direction = Math.atan2(facing.x * side, -facing.y);
         const angle =
-            !dead && swingState
-                ? direction -
-                  load * 1.85 +
-                  (landed ? 0.07 * brace - 1.05 * bounce : recovery * 0.44)
-                : 1.08;
-        if (swingAge >= -10 && swingAge <= 60) {
+            !dead && attackPreview
+                ? 1.08 + (direction - 1.85 - 1.08) * load
+                : !dead && swingState
+                  ? direction -
+                    load * 1.85 +
+                    (landed ? 0.07 * brace - 1.05 * bounce : recovery * 0.44)
+                  : 1.08;
+        if (!attackPreview && swingAge >= -10 && swingAge <= 60) {
             ctx.save();
             const sweep = Math.max(0, 1 - Math.max(0, swingAge) / 60);
             const head = angle - Math.PI / 2 + 0.24;
@@ -1604,13 +2358,22 @@ export function createFractureView(canvas, touchControls) {
         ctx.restore();
 
         if (dead) return;
-        label(ctx, name, x, y - 69 - labelLift, 14, name === '나' ? '#fff6db' : '#ffecb6');
+        label(ctx, name, x, y - 69 - labelLift, 16, localMiner ? '#fff6db' : '#b9f0e7');
         if (Number.isFinite(player.maxHp)) {
-            const width = 39;
+            const width = 48;
             const slot = width / player.maxHp;
+            ctx.fillStyle = '#342c32';
+            ctx.fillRect(x - width / 2 - 3, y - 94 - labelLift, width + 4, 12);
             for (let i = 0; i < player.maxHp; i++) {
-                ctx.fillStyle = i < player.hp ? '#ffba88' : '#5d443c';
-                ctx.fillRect(x - width / 2 + slot * i, y - 81 - labelLift, slot - 2, 4);
+                ctx.fillStyle =
+                    i < player.hp
+                        ? player.hp === 1
+                            ? '#ff785e'
+                            : localMiner
+                              ? '#9fe084'
+                              : '#82d8c8'
+                        : '#73505b';
+                ctx.fillRect(x - width / 2 + slot * i, y - 91 - labelLift, slot - 2, 6);
             }
         }
     }
@@ -1692,15 +2455,16 @@ export function createFractureView(canvas, touchControls) {
                 ctx.lineWidth = 1.3;
                 ellipse(ctx, x, y, radius * 0.72, radius * 0.49, null, '#fff0ab');
             }
-            if (age < 106) {
-                const flash = (1 - age / 106) ** 0.7;
+            const brightCoreMs = mark.kind === 'finisher' ? 78 : 55;
+            if (age < brightCoreMs) {
+                const flash = (1 - age / brightCoreMs) ** 0.7;
                 ctx.globalAlpha = flash * 0.93;
                 const angle = Math.atan2(dy, dx);
                 polygon(
                     ctx,
                     Array.from({ length: 16 }, (_, i) => {
                         const a = angle + (i * Math.PI) / 8;
-                        const r = i % 2 ? 7 : (i % 4 ? 26 : 38) * (0.7 + flash * 0.3);
+                        const r = i % 2 ? 6 : (i % 4 ? 21 : 32) * (0.7 + flash * 0.3);
                         return { x: x + Math.cos(a) * r, y: y + Math.sin(a) * r };
                     }),
                     '#fff8cc',
@@ -1782,6 +2546,30 @@ export function createFractureView(canvas, touchControls) {
         ctx.globalAlpha = 1;
     }
     function groundPulse(mark, time) {
+        if (mark.kind === 'collapseWarn' || mark.kind === 'collapse') {
+            const age = time - mark.at;
+            const warning = mark.kind === 'collapseWarn';
+            const phase = age / (warning ? mark.durationMs : 325);
+            if (phase < 0 || phase >= 1) return;
+            const point = project(mark);
+            const radius = warning ? mark.radius : mark.radius * (0.7 + 0.48 * phase);
+            const rx = radius * (layout.turned ? tilt : 1);
+            const ry = radius * (layout.turned ? 1 : tilt);
+            ctx.save();
+            ctx.globalAlpha = warning ? 0.15 + phase * 0.24 : (1 - phase) * 0.55;
+            ellipse(ctx, point.x, point.y, rx, ry, warning ? '#d6543d' : '#eecb80');
+            ctx.globalAlpha = warning ? 0.8 : (1 - phase) * 0.9;
+            ctx.lineWidth = warning ? 3 : 5 * (1 - phase) + 1;
+            ctx.setLineDash(warning ? [12, 7] : []);
+            ellipse(ctx, point.x, point.y, rx, ry, null, warning ? '#ff835f' : '#ffeabd');
+            ctx.setLineDash([]);
+            if (warning) {
+                ellipse(ctx, point.x, point.y, rx * phase, ry * phase, null, '#ffbb79');
+                label(ctx, '붕괴', point.x, point.y + ry - 12, 22, '#ffbc9c');
+            }
+            ctx.restore();
+            return;
+        }
         if (mark.kind !== 'split' && mark.kind !== 'slam' && mark.kind !== 'hurt') return;
         const age = time - mark.at;
         const t = age / 320;
@@ -1821,6 +2609,26 @@ export function createFractureView(canvas, touchControls) {
             mark.kind === 'slam'
         ) {
             impactBurst(mark, age, pal);
+        } else if (mark.kind === 'bait') {
+            const direction = screenDirection(mark.direction);
+            const side = { x: -direction.y, y: direction.x };
+            const distance = 18 + t * 74;
+            const width = 14 + t * 28;
+            ctx.globalAlpha = (1 - t) ** 2;
+            for (const offset of [0, 21, 42]) {
+                const x = p.x + direction.x * (distance - offset);
+                const y = p.y + direction.y * (distance - offset) - (mark.z ?? 0);
+                line(
+                    ctx,
+                    [
+                        { x: x - side.x * width, y: y - side.y * width },
+                        { x: x + direction.x * 20, y: y + direction.y * 20 },
+                        { x: x + side.x * width, y: y + side.y * width },
+                    ],
+                    '#ffdb86',
+                    5 - t * 2.5,
+                );
+            }
         } else if (mark.kind === 'collect') {
             ctx.globalAlpha = Math.max(0, 1 - t);
             const a = project(mark, 7),
@@ -1844,8 +2652,13 @@ export function createFractureView(canvas, touchControls) {
                 label(ctx, `+${mark.amount ?? 1}`, b.x - 11, b.y - 23 - u * 12, 17, color.light);
         } else if (mark.kind === 'hurt') {
             impactBurst(mark, age, pal);
-            ctx.globalAlpha = Math.max(0, 1 - t * 1.6);
-            label(ctx, `−${mark.amount ?? 1}`, p.x, p.y - 42 - t * 22, 20, '#ffac92');
+            ctx.globalAlpha = Math.max(0, 1 - t ** 3);
+            const push = screenDirection(mark.direction);
+            const x = p.x + push.x * 29 * t;
+            const y = p.y - 44 - t * 32;
+            ctx.fillStyle = '#532b3e';
+            ctx.fillRect(x - 17, y - 15, 34, 29);
+            label(ctx, `−${mark.amount ?? 1}`, x, y + 1, 27, '#ffae94');
         } else if (mark.kind === 'upgrade') {
             ctx.globalAlpha = Math.max(0, 1 - t);
             ctx.lineWidth = 2.4;
@@ -1936,6 +2749,7 @@ export function createFractureView(canvas, touchControls) {
         ctx.lineWidth = 1.5;
         if (state.bounds) paintOnlineGround(state);
         else basePaint();
+        for (const landmark of landmarks) paintLandmark(state, landmark);
         for (const mark of state.marks) {
             if (isVisible(project(mark), 120)) groundPulse(mark, state.time);
         }
@@ -1950,17 +2764,20 @@ export function createFractureView(canvas, touchControls) {
         addActors(state.obstacles, 'wall', 110);
         addActors(state.shards, 'shard', 75);
         if (state.others) addActors(state.others, 'other', 125);
+        collectScenery(state);
         actors.push({ a: state.player, kind: 'player', p: playerScreen });
         actors.sort((a, b) => a.p.y - b.p.y);
         for (const { a, kind, p } of actors) {
             if (kind === 'rock') rock(a, state);
             if (kind === 'wall') wall(a);
             if (kind === 'shard') shard(a, state);
-            if (kind === 'player') avatar(a, state.level, state.time, state.swing);
+            if (kind === 'scenery') drawScenery(a, p);
+            if (kind === 'player')
+                avatar(a, state.level, state.time, state.swing, '나', 0, state.attackPreview);
             if (kind === 'other') {
                 const lift =
-                    Math.abs(p.x - playerScreen.x) < 68 && Math.abs(p.y - playerScreen.y) < 23
-                        ? 27
+                    Math.abs(p.x - playerScreen.x) < 69 && Math.abs(p.y - playerScreen.y) < 39
+                        ? 38
                         : 0;
                 avatar(a, a.level, state.time, a.swing, '광부 ' + String(a.id).slice(-4), lift);
             }

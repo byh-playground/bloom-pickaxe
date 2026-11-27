@@ -44,6 +44,9 @@ const playbackDelayMs = 100;
 const maximumSnapshots = 12;
 const maximumDelayMs = 320;
 const maxExtrapolationMs = 100;
+const attackDrawMs = 65;
+const attackPreviewHoldMs = 550;
+const attackPreviewReleaseMs = 85;
 const mix = (a, b, weight) => a + (b - a) * weight;
 
 export function createPlayback(delayMs = playbackDelayMs, metrics) {
@@ -82,6 +85,13 @@ export function createPlayback(delayMs = playbackDelayMs, metrics) {
                       : Math.max(0, (time - actor.hitstopUntil) / (timing.to - actor.hitstopUntil));
                 model.x = mix(actor.x, next.x, weight);
                 model.y = mix(actor.y, next.y, weight);
+                if (
+                    next.impact?.origin &&
+                    next.impact.at > timing.from &&
+                    actor.hitstopUntil > timing.from &&
+                    time >= actor.hitstopUntil
+                )
+                    model.impact = { ...next.impact, at: actor.hitstopUntil };
                 if (Number.isFinite(actor.z) && Number.isFinite(next.z))
                     model.z = Math.max(0, mix(actor.z, next.z, weight));
             }
@@ -264,6 +274,8 @@ export function createOnlineClient(
     let Rapier, prediction;
     let displayedPlayer;
     let miningTransition;
+    let attackPreview;
+    let displayedSwing;
     const sentInputs = new Map();
     let previousInput = { x: 0, y: 0 };
     const info = () => ({ phase, channelId, playerId });
@@ -272,6 +284,45 @@ export function createOnlineClient(
     engine?.then((module) => {
         Rapier = module;
     });
+
+    function previewAttack(now) {
+        if (
+            attackPreview ||
+            state.swing ||
+            displayedSwing ||
+            !state.player.hp ||
+            state.time < (state.player.hitstopUntil ?? 0)
+        )
+            return;
+        const { player, target } = state;
+        const facing = target
+            ? { x: target.spot.x - player.x, y: target.spot.y - player.y }
+            : { x: player.faceX, y: player.faceY };
+        attackPreview = {
+            at: now,
+            after: state.time,
+            spawnRevision: player.spawnRevision,
+            facing,
+        };
+    }
+
+    function previewPose(scene, now) {
+        if (!attackPreview) return undefined;
+        const age = now - attackPreview.at;
+        const resolved = scene.swing?.at > attackPreview.after && scene.swing.contacted;
+        if (
+            !scene.player.hp ||
+            scene.player.spawnRevision !== attackPreview.spawnRevision ||
+            resolved ||
+            age >= attackPreviewHoldMs + attackPreviewReleaseMs
+        ) {
+            attackPreview = undefined;
+            return undefined;
+        }
+        const rise = Math.min(1, Math.max(0, age / attackDrawMs));
+        const release = Math.max(0, (age - attackPreviewHoldMs) / attackPreviewReleaseMs);
+        return { load: (1 - (1 - rise) ** 2) * (1 - release), facing: attackPreview.facing };
+    }
 
     function receive(raw, bytes) {
         const now = performance.now();
@@ -339,6 +390,8 @@ export function createOnlineClient(
         state = null;
         displayedPlayer = undefined;
         miningTransition = undefined;
+        attackPreview = undefined;
+        displayedSwing = undefined;
         seq = 0;
         playback = createPlayback(playbackDelayMs, metrics);
         sentInputs.clear();
@@ -369,6 +422,7 @@ export function createOnlineClient(
             clearTimeout(timeout);
             if (socket !== connection) return;
             phase = 'disconnected';
+            attackPreview = undefined;
             prediction?.dispose();
             prediction = null;
             notify();
@@ -403,6 +457,7 @@ export function createOnlineClient(
             if (socket?.readyState !== WebSocket.OPEN || phase !== 'online') return false;
             socket.send(JSON.stringify({ type: 'input', seq: ++seq, ...input }));
             const now = performance.now();
+            if (input.attack) previewAttack(now);
             prediction?.record(seq, input, now);
             if (
                 metrics &&
@@ -417,6 +472,7 @@ export function createOnlineClient(
         sample(now) {
             const scene = playback?.sample(now);
             if (!scene) return null;
+            displayedSwing = scene.swing;
             if (displayedPlayer?.spawnRevision !== scene.player.spawnRevision) {
                 displayedPlayer = undefined;
                 miningTransition = undefined;
@@ -457,7 +513,7 @@ export function createOnlineClient(
                 if (canPredict) pose = { ...pose, ...prediction.sample(now) };
             }
             displayedPlayer = Object.assign(displayedPlayer ?? {}, pose);
-            return { ...scene, player: displayedPlayer };
+            return { ...scene, player: displayedPlayer, attackPreview: previewPose(scene, now) };
         },
     };
 }

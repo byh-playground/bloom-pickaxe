@@ -12,6 +12,40 @@ export const onlineSize = {
 export const worldCenter = { x: onlineSize.width / 2, y: onlineSize.height / 2 };
 export const onlineStarter = { x: worldCenter.x + 221, y: worldSector.height * 2 + 477 };
 const starterNeighbor = { x: 53, y: 476, region: 0, guaranteed: 0, tutorial: true };
+export const copperRavineCenter = { x: 449, y: 177 };
+export const ironRidgeCenter = { x: 455, y: 450 };
+export const onlineCopperRavineCenter = {
+    x: worldCenter.x + copperRavineCenter.x,
+    y: worldSector.height * 2 + copperRavineCenter.y,
+};
+export const onlineIronRidgeCenter = {
+    x: worldCenter.x + ironRidgeCenter.x,
+    y: worldSector.height * 3 + ironRidgeCenter.y,
+};
+const copperLode = [{ x: 345, y: 175 }, copperRavineCenter, { x: 553, y: 186 }].map((point) => ({
+    ...point,
+    region: 0,
+    guaranteed: 1,
+    lode: 'copper',
+}));
+const lodeClearance = 98;
+const starterClearance = 126;
+const copperRegion = [
+    ...copperLode,
+    { x: 545, y: 293, region: 0, guaranteed: 1, lode: 'copper', guardian: true },
+];
+const ironDeposit = [{ x: 345, y: 450 }, ironRidgeCenter, { x: 565, y: 449 }].map((point) => ({
+    ...point,
+    region: 1,
+    guaranteed: 2,
+    lode: 'iron',
+}));
+const ironLode = [
+    ...ironDeposit,
+    { x: 591, y: 335, region: 1, guaranteed: 2, lode: 'iron', guardian: true },
+];
+const nearLode = (group, x, y) =>
+    group.some((slot) => Math.hypot(slot.x - x, slot.y - y) < lodeClearance);
 
 const anchors = [
     [128, 120],
@@ -33,6 +67,7 @@ export function sectorSlots(seed, sx, sy) {
     for (let i = 0; i < anchors.length; i++) {
         const [ax, ay] = anchors[i];
         const tutorial = sx === 50 && sy === 2 && i === 5;
+        if (i >= 3 && !tutorial && ((sectorSeed >>> (i * 3)) & 3) === 0) continue;
         const x = originX + ax + (tutorial ? 0 : (random() - 0.5) * 65);
         const y = originY + ay + (tutorial ? 0 : (random() - 0.5) * 65);
         if (Math.hypot(x - worldCenter.x, y - worldCenter.y) < 160) continue;
@@ -52,19 +87,40 @@ export function sectorSlots(seed, sx, sy) {
         if (i === 6 && region === 0 && (sx + sy) % 2 === 0)
             slots.push({ x: x - 106, y, region, seed: Math.floor(random() * 2 ** 32) });
     }
-    if (sx === 50 && sy === 2)
+    const lode = sx === 50 && sy === 2 ? copperRegion : sx === 50 && sy === 3 ? ironLode : null;
+    if (lode) {
+        for (let i = slots.length - 1; i >= 0; i--)
+            if (nearLode(lode, slots[i].x - originX, slots[i].y - originY)) slots.splice(i, 1);
+        for (const slot of lode)
+            slots.push({
+                ...slot,
+                x: originX + slot.x,
+                y: originY + slot.y,
+                seed: Math.floor(random() * 2 ** 32),
+            });
+    }
+    if (sx === 50 && sy === 2) {
+        for (let i = slots.length - 1; i >= 0; i--) {
+            const slot = slots[i];
+            if (
+                !slot.tutorial &&
+                Math.hypot(slot.x - onlineStarter.x, slot.y - onlineStarter.y) < starterClearance
+            )
+                slots.splice(i, 1);
+        }
         slots.push({
             ...starterNeighbor,
             x: originX + starterNeighbor.x,
             y: originY + starterNeighbor.y,
             seed: sectorSeed,
         });
+    }
     if (sx === 50 && sy === 50)
         slots.push({ ...worldCenter, region: 2, seed: sectorSeed, guaranteed: 4, boss: true });
     return slots;
 }
 
-export const oreSlots = [
+const practiceSlots = [
     { x: 155, y: 476, region: 0, guaranteed: 0, tutorial: true },
     starterNeighbor,
     { x: 83, y: 348, region: 0 },
@@ -85,6 +141,15 @@ export const oreSlots = [
     { x: 342, y: 246, region: 2, guaranteed: 3 },
     { x: 563, y: 275, region: 2, guaranteed: 4 },
     { x: 419, y: 337, region: 2, guaranteed: 4, boss: true },
+];
+export const oreSlots = [
+    ...practiceSlots.filter(
+        (slot) =>
+            slot.boss ||
+            (!nearLode(copperRegion, slot.x, slot.y) && !nearLode(ironLode, slot.x, slot.y)),
+    ),
+    ...copperRegion,
+    ...ironLode,
 ];
 
 export function oreRng(seed) {

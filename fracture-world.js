@@ -24,6 +24,7 @@ const ramRollMs = 250;
 const chainBeatMs = 75;
 const shardLandingMs = 310;
 const shardClaimMs = 900;
+const shardPickupReach = 58;
 export function walkDelta(x, y, dt) {
     const distance = (walkSpeed * dt) / Math.max(1, Math.hypot(x, y));
     return { x: x * distance, y: y * distance };
@@ -63,11 +64,16 @@ export const pickaxes = [
         ),
     })),
 ];
-const contours = ['round', 'round', 'ridge', 'spire', 'ridge'];
+const contours = ['round', 'copper', 'iron', 'spire', 'ridge'];
 const respawnMs = 5500;
 const playerRespawnMs = 1150;
 const bossRespawnMs = 24000;
 const warnMs = 480;
+const guardianAwareness = 300;
+const guardianChargeReach = 154;
+const guardianApproachSpeed = 76;
+const collapseDelayMs = 450;
+const collapseRadius = 116;
 const tutorialWarnMs = 1000;
 const recoverMs = 650;
 const impactDrag = 7.5;
@@ -76,7 +82,7 @@ const miningHitstopMs = 50;
 const finisherHitstopMs = 160;
 const finisherRecoilMs = 120;
 const finisherRecoilSpeed = 320;
-const attackBufferMs = 100;
+const attackBufferMs = 450;
 const swingTotalMs = 245;
 const impulseLimit = 390;
 const starter = { x: 221, y: 477 };
@@ -96,6 +102,35 @@ const outlines = {
         [0.48, 0.86],
         [-0.19, 0.88],
         [-0.83, 0.59],
+    ],
+    broad: [
+        [-1.08, -0.18],
+        [-0.71, -0.66],
+        [0.36, -0.76],
+        [1.07, -0.29],
+        [0.89, 0.4],
+        [0.21, 0.74],
+        [-0.76, 0.62],
+    ],
+    copper: [
+        [-1.04, -0.3],
+        [-0.59, -0.84],
+        [0.16, -0.96],
+        [0.62, -0.62],
+        [1.08, -0.07],
+        [0.64, 0.59],
+        [-0.02, 0.88],
+        [-0.84, 0.53],
+    ],
+    iron: [
+        [-0.83, -0.58],
+        [-0.17, -1.03],
+        [0.49, -0.89],
+        [0.78, -0.25],
+        [0.68, 0.58],
+        [0.04, 1.02],
+        [-0.58, 0.77],
+        [-0.9, 0.13],
     ],
     ridge: [
         [-0.96, -0.12],
@@ -393,6 +428,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
         marks: [],
     };
     const participants = new Map();
+    let ranking = null;
     const playerSessions = new Map();
     const chunks = new Map();
     const activeChunks = new Set();
@@ -403,6 +439,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
     let slams = 0;
     let impactFractures = [];
     const finishers = new Map();
+    const collapses = [];
     const shardOwners = new WeakMap();
 
     function addPlayer(id) {
@@ -434,6 +471,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             ramHeading: null,
         };
         participants.set(id, session);
+        ranking = null;
         playerSessions.set(player, session);
         return session;
     }
@@ -511,15 +549,21 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             id: keys[tier],
             x: slot.x + (slot.guaranteed === 0 || slot.boss ? 0 : (random() - 0.5) * 16),
             y: slot.y + (slot.guaranteed === 0 || slot.boss ? 0 : (random() - 0.5) * 16),
-            r: slot.boss ? 58 : 39 + tier * 2 + random() * 5,
-            contour: contours[tier],
+            r: slot.boss ? 58 : slot.guardian ? 52 : 39 + tier * 2 + random() * 5,
+            lode: slot.lode,
+            guardian: slot.guardian,
+            contour:
+                !slot.tutorial && tier === 0 && Math.floor(slot.seed ?? slot.x + slot.y) % 3 === 1
+                    ? 'broad'
+                    : contours[tier],
             heading: random() * Math.PI * 2,
             stage: 'roam',
             stageUntil: state.time + 500 + random() * 1400,
             chargeDir: null,
-            chargeDistance: slot.boss ? 125 : slot.guaranteed === 0 ? 68 : 96,
+            chargeDistance: slot.boss || slot.guardian ? 125 : slot.guaranteed === 0 ? 68 : 96,
             chargeLeft: 0,
-            remainingYield: slot.boss ? 35 : (slot.guaranteed === 0 ? 15 : 12) + tier,
+            remainingYield:
+                slot.boss || slot.guardian ? 35 : (slot.tutorial || slot.lode ? 25 : 12) + tier,
             boss: Boolean(slot.boss),
             slot,
         });
@@ -588,6 +632,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
         if (session.player.hp > 0) physics.remove(session.player);
         playerSessions.delete(session.player);
         participants.delete(id);
+        ranking = null;
         refreshChunks();
     }
     function mark(kind, x, y, ore, extra = {}) {
@@ -666,21 +711,17 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
         const { primed } = target;
         const action = primed ?? miningAction(session, target, hit);
         let plan = action.plan;
-        if (primed && !target.boss) {
-            const split = splitChip(
-                target.polygon,
-                direction,
-                target.r,
-                area(target.polygon) * 0.08,
-            );
-            plan = { base: [], parts: split.parts, direction };
-        }
+        if ((primed || chained) && !target.boss) plan = planShatter(target, direction);
         target.lastHit = state.time;
         impactFractures.push({
             session,
-            at: state.time + (chained ? chainBeatMs : 0),
+            at: state.time + (chained ? finisherHitstopMs + chainBeatMs : 0),
             action: { ...action, plan, direction, claimed: true, chained },
         });
+    }
+    function planShatter(target, direction) {
+        const split = splitChip(target.polygon, direction, target.r, area(target.polygon) * 0.08);
+        return { base: [], parts: split.parts, direction };
     }
     function finishRam(rock) {
         const roll = rock.ram;
@@ -705,6 +746,18 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
                 if (actor.ram && speed >= 100 && incoming >= 0.5) {
                     fractureOnImpact(actor.ram.session, other, hit, direction, true);
                     finishRam(actor);
+                } else if (
+                    actor.stage === 'charge' &&
+                    actor.primed &&
+                    speed >= 100 &&
+                    incoming >= 0.5
+                ) {
+                    const owner = participants.get(actor.primed.ownerId);
+                    if (owner?.player.hp && !actor.boss) {
+                        fractureOnImpact(owner, actor, hit, direction);
+                        fractureOnImpact(owner, other, hit, direction, true);
+                        mark('bait', hit.x, hit.y, ore, { direction, strength: 1.4, z: 8 });
+                    }
                 }
             }
         }
@@ -732,6 +785,28 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
         actor.kickX = vx * drag;
         actor.kickY = vy * drag;
     }
+    function chargeHeading(target, player) {
+        const aim = unit(player.x - target.x, player.y - target.y);
+        if (!target.lode) return aim;
+        let best = aim;
+        let alignment = 0.55;
+        for (const rock of state.rocks) {
+            if (
+                rock === target ||
+                rock.lode !== target.lode ||
+                finishers.has(rock) ||
+                distance(rock, target) > target.chargeDistance + target.r + rock.r
+            )
+                continue;
+            const lane = unit(rock.x - target.x, rock.y - target.y);
+            const score = dot(lane, aim);
+            if (score > alignment) {
+                best = lane;
+                alignment = score;
+            }
+        }
+        return best;
+    }
     function startStrike(session, action) {
         const { target } = action;
         const spot = contactPoint(action);
@@ -743,7 +818,12 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             session.swing.hitAt = state.time;
             const separated = Boolean(action.plan.loose || action.plan.parts);
             const strength = separated ? 1.05 : 0.68;
-            const plan = separated ? action.plan : (target.primed?.plan ?? action.plan);
+            const plan =
+                (target.slot?.tutorial || target.lode) && target.primed
+                    ? planShatter(target, direction)
+                    : separated
+                      ? action.plan
+                      : (target.primed?.plan ?? action.plan);
             if (target.polygon && target.primed && plan.parts && !plan.base.length) {
                 session.swing.holdUntil = beginFinisher(session, { ...action, plan, direction });
                 session.swing.endsAt += finisherHitstopMs;
@@ -769,7 +849,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             if (target.polygon && target.stage === 'roam') {
                 target.stage = 'warn';
                 target.stageUntil = state.time + (target.slot.tutorial ? tutorialWarnMs : warnMs);
-                target.chargeDir = unit(session.player.x - target.x, session.player.y - target.y);
+                target.chargeDir = chargeHeading(target, session.player);
                 target.heading = Math.atan2(target.chargeDir.y, target.chargeDir.x);
             }
             if (target.polygon) {
@@ -903,13 +983,15 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
                 result.parts || result.loose
                     ? result
                     : planRock(target, closestOnPath(local, shape, true), true);
-            target.primed = { ...action, plan, prepare: false };
+            target.primed = { ...action, plan, prepare: false, ownerId: session.id };
             target.cracks = [
                 ...target.cracks.slice(-3),
                 { origin: local, paths: plan.paths, armed: true },
             ];
             target.geometryRevision++;
-            session.message = name + '에 금이 갔어요. 몸으로 밀거나 곡괭이로 한 번 더 치세요.';
+            session.message = target.lode
+                ? '금이 갔어요. 돌진을 피해서 옆 광물과 부딪치게 해 보세요.'
+                : name + '에 금이 갔어요. 몸으로 밀거나 곡괭이로 한 번 더 치세요.';
             return;
         }
         if (target.polygon && !result.parts && !result.loose) {
@@ -954,6 +1036,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
                 if (active) physics.remove(target);
                 if (sector) sector.splice(sector.indexOf(target), 1);
                 session.stats.kills++;
+                ranking = null;
                 depleted.push({
                     slot: target.slot,
                     respawnAt: state.time + (target.boss ? bossRespawnMs : respawnMs),
@@ -994,6 +1077,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
         if (!costs.every(([ore, amount]) => session.bag[ore] >= amount)) return;
         for (const [ore, amount] of costs) session.bag[ore] -= amount;
         session.level++;
+        ranking = null;
         session.stats.upgrades++;
         mark('upgrade', session.player.x, session.player.y, next.ore);
         session.message = next.name + ' 완성!';
@@ -1112,6 +1196,58 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
         session.message = '새 채굴터에서 다시 시작했어요.';
         return true;
     }
+    function seekWithGuardian(rock, dt) {
+        let nearest = null;
+        let reach = guardianAwareness;
+        const tier = minerals[rock.id].tier;
+        for (const session of participants.values()) {
+            const { player, level } = session;
+            if (!player.hp || level < tier) continue;
+            const range = distance(rock, player);
+            if (range >= reach) continue;
+            nearest = session;
+            reach = range;
+        }
+        if (!nearest) return false;
+        const aim = unit(nearest.player.x - rock.x, nearest.player.y - rock.y);
+        rock.heading = Math.atan2(aim.y, aim.x);
+        if (reach > guardianChargeReach) {
+            moveActor(rock, aim.x * guardianApproachSpeed * dt, aim.y * guardianApproachSpeed * dt);
+        } else {
+            rock.stage = 'warn';
+            rock.stageUntil = state.time + warnMs;
+            rock.chargeDir = aim;
+            const name = rock.lode === 'iron' ? '철 수호석' : '구리 수호석';
+            nearest.message = name + ' 돌진! 예고 방향 옆으로 피하세요.';
+        }
+        return true;
+    }
+    function warnCollapse(rock) {
+        const { x, y } = rock;
+        collapses.push({ x, y, source: rock, at: state.time + collapseDelayMs });
+        mark('collapseWarn', x, y, rock.id, {
+            radius: collapseRadius,
+            durationMs: collapseDelayMs,
+        });
+    }
+    function stepCollapses() {
+        while (collapses.length && collapses[0].at <= state.time) {
+            const collapse = collapses.shift();
+            const { x, y, source } = collapse;
+            mark('collapse', x, y, source.id, { radius: collapseRadius, strength: 1.45 });
+            for (const session of participants.values()) {
+                const player = session.player;
+                if (distance(player, collapse) > collapseRadius) continue;
+                const inward = unit(x - player.x, y - player.y);
+                hurtPlayer(
+                    session,
+                    source,
+                    { x: player.x, y: player.y, nx: inward.x, ny: inward.y },
+                    155,
+                );
+            }
+        }
+    }
     function stepMobs(stepSeconds) {
         for (const rock of state.rocks) {
             const dt = secondsAfterHitstop(state.time, stepSeconds, rock.hitstopUntil);
@@ -1152,6 +1288,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
                     kick(rock, { x: hit.nx, y: hit.ny }, (speed * 0.24) / impactMass(rock), 0.5);
                 }
                 if (hit || moved + 0.005 < movement || rock.chargeLeft <= 0.005) {
+                    if (rock.guardian) warnCollapse(rock);
                     rock.stage = 'recover';
                     rock.stageUntil = state.time + recoverMs;
                 }
@@ -1161,6 +1298,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
                     rock.stageUntil = state.time;
                 }
             } else {
+                if (rock.guardian && seekWithGuardian(rock, dt)) continue;
                 if (state.time >= rock.stageUntil) {
                     const back = Math.atan2(rock.slot.y - rock.y, rock.slot.x - rock.x);
                     rock.heading = distance(rock, rock.slot) > 37 ? back : rng() * Math.PI * 2;
@@ -1200,7 +1338,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             return true;
         const claim = shardOwners.get(shard);
         let session = null;
-        let best = 44;
+        let best = shardPickupReach;
         for (const candidate of participants.values()) {
             const reach = distance(candidate.player, shard);
             if (!candidate.moving || candidate.swing?.target === shard || reach > best) continue;
@@ -1280,6 +1418,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
         }
         if (relocated) refreshChunks();
         stepMobs(dt);
+        stepCollapses();
         if (impactFractures.length)
             impactFractures = impactFractures.filter(({ session, action, at }) => {
                 if (state.time < at) return true;
@@ -1337,6 +1476,8 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
         const {
             uid,
             id,
+            lode,
+            guardian,
             geometryRevision,
             x,
             y,
@@ -1357,6 +1498,8 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
         return {
             uid,
             id,
+            lode,
+            guardian,
             geometryRevision,
             x: roundWire(x),
             y: roundWire(y),
@@ -1395,6 +1538,10 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
     function snapshot(id) {
         const session = participants.get(id);
         if (!session) return null;
+        ranking ??= Array.from(participants.values())
+            .map(({ id, stats, level }) => ({ id, breaks: stats.kills, level }))
+            .sort((a, b) => b.breaks - a.breaks || b.level - a.level)
+            .slice(0, 4);
         const near = (object) =>
             Math.abs(object.x - session.player.x) <= 800 &&
             Math.abs(object.y - session.player.y) <= 700;
@@ -1404,6 +1551,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
         );
         return {
             time: state.time,
+            ranking,
             level,
             dash: emptyDash,
             bag,

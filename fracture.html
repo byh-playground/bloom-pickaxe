@@ -9,7 +9,7 @@
         <script type="module" src="./fracture.js"></script>
     </head>
     <body>
-        <main class="fracture" aria-label="광석을 캐서 곡괭이를 개조하는 목업">
+        <main class="fracture" aria-label="채굴터">
             <canvas id="field" aria-label="광물 몹과 파편이 있는 채굴터"></canvas>
 
             <header class="top">
@@ -19,21 +19,43 @@
                         <strong id="tool">나무 곡괙이</strong>
                     </div>
                 </section>
-                <p id="status" class="status" role="status" aria-live="polite">
-                    곡괭이로 금을 내고 몸으로 밀어 깨세요
-                </p>
+                <div class="field-guide">
+                    <ol class="mining-steps" aria-label="채굴 순서">
+                        <li data-phase="strike">금 내기</li>
+                        <li data-phase="ram">연쇄 파쇄</li>
+                        <li data-phase="gather">곡괭이 강화</li>
+                    </ol>
+                    <p id="status" class="status" role="status" aria-live="polite">
+                        가까운 돌에 곡괭이를 휘둘러 금을 내세요
+                    </p>
+                </div>
                 <button id="reset" type="button" aria-label="처음 상태로 되돌리기">
                     <span aria-hidden="true">↺</span>
                 </button>
             </header>
 
             <aside id="online-panel" aria-label="채굴터 정보" hidden>
-                <span id="connection-status" role="status"></span>
-                <a id="return-menu" href="./">메인 화면</a>
+                <div class="mine-panel-header">
+                    <span id="connection-status" role="status"></span>
+                    <a id="return-menu" href="./" aria-label="메인 화면" title="메인 화면">
+                        <span aria-hidden="true">↩</span>
+                    </a>
+                </div>
+                <canvas
+                    id="mine-map"
+                    width="132"
+                    height="94"
+                    aria-label="주변 광맥 지도"
+                    hidden
+                ></canvas>
                 <div id="center-compass" hidden>
                     <span class="compass-arrow" aria-hidden="true"></span>
                     <span id="center-distance"></span>
                 </div>
+                <section id="mine-rank" aria-label="파쇄 순위" hidden>
+                    <strong>파쇄 순위</strong>
+                    <ol id="mine-rank-list"></ol>
+                </section>
             </aside>
 
             <section class="touch-sticks" aria-label="터치 조작">

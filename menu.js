@@ -243,12 +243,12 @@ function drawMine() {
     ctx.lineCap = 'round';
 
     const sky = ctx.createLinearGradient(0, 0, 0, 600);
-    sky.addColorStop(0, '#bdc790');
-    sky.addColorStop(0.4, '#94ad74');
-    sky.addColorStop(1, '#5f824e');
+    sky.addColorStop(0, '#dbe9a4');
+    sky.addColorStop(0.4, '#a8c580');
+    sky.addColorStop(1, '#679a54');
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, 680, 600);
-    ellipse(488, 100, 94, 65, '#f1d79770');
+    ellipse(488, 100, 94, 65, '#fff2b17a');
     contour('M0 140Q85 76 170 151 260 67 378 158 492 100 680 168V294H0Z', '#86a273');
     contour('M0 205Q107 163 208 224 331 152 427 214 543 169 680 225V353H0Z', '#749364');
     contour('M0 354Q87 293 173 302 335 272 419 224 539 203 680 294V600H0Z', '#91a966');
@@ -394,6 +394,19 @@ function drawMine() {
     crystals(578, 404, 0.72);
     crystals(132, 475, 0.8);
     miner(242, 428, 1.14);
+
+    for (const [x, y, size] of [
+        [121, 420, 13],
+        [156, 441, 7],
+        [569, 360, 10],
+        [597, 373, 7],
+    ]) {
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.scale(size, size);
+        contour('M0-1 .2-.2 1 0 .2.2 0 1-.2.2-1 0-.2-.2Z', '#fff4b4');
+        ctx.restore();
+    }
 
     const shade = ctx.createRadialGradient(352, 265, 150, 350, 280, 462);
     shade.addColorStop(0, '#30463200');

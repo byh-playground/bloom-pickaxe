@@ -1,5 +1,6 @@
 import { createFractureWorld, minerals, tickMs, pickaxes } from './fracture-world.js';
 import { createFractureView } from './fracture-view.js';
+import { onlineCopperRavineCenter, onlineIronRidgeCenter } from './fracture-spawn.js';
 import { createStick } from './fracture-stick.js';
 import {
     createOnlineClient,
@@ -19,6 +20,10 @@ const onlinePanel = get('online-panel');
 const connectionStatus = get('connection-status');
 const compass = get('center-compass');
 const centerDistance = get('center-distance');
+const mineMap = get('mine-map');
+const mineMapContext = mineMap.getContext('2d');
+const mineRank = get('mine-rank');
+const mineRankList = get('mine-rank-list');
 const tool = get('tool');
 const nextTool = get('next-tool');
 const ingredientList = get('ingredients');
@@ -85,7 +90,9 @@ let lastFrame;
 let lastHudFrame = -Infinity;
 let renderedLevel = -1;
 let carry = 0;
-let sound;
+// Chrome can block while allocating its audio graph. Prepare it during boot.
+// The first gesture unlocks playback on browsers that start it suspended.
+const sound = prepareAudio();
 let impactNoise;
 const held = new Set();
 const keys = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight'];
@@ -102,7 +109,6 @@ const moveStick = createStick(movePad, audioReady, {
 const attackButton = get('attack-button');
 
 function requestAttack() {
-    audioReady();
     if (online) {
         if (online.info().phase !== 'online') return;
         queuedAttack = true;
@@ -110,6 +116,7 @@ function requestAttack() {
     } else {
         world?.attack();
     }
+    audioReady();
 }
 attackButton.addEventListener('pointerdown', (event) => {
     if (event.button !== 0) return;
@@ -153,10 +160,18 @@ function updateConnection({ phase, channelId } = { phase: 'unavailable' }) {
 function updateText(node, text) {
     if (node.textContent !== String(text)) node.textContent = text;
 }
+function prepareAudio() {
+    if (!window.AudioContext) return null;
+    try {
+        return new AudioContext();
+    } catch (error) {
+        if (!(error instanceof DOMException)) throw error;
+        return null;
+    }
+}
+
 function audioReady() {
-    if (!window.AudioContext) return;
-    sound ??= new AudioContext();
-    if (sound.state !== 'running') void sound.resume().catch(() => {});
+    if (sound && sound.state !== 'running') void sound.resume().catch(() => {});
 }
 function strikeSound(mark, now) {
     if (!impactNoise) {
@@ -221,7 +236,9 @@ function playSounds(state) {
             mark.kind === 'split' ||
             mark.kind === 'clink' ||
             mark.kind === 'hurt' ||
-            mark.kind === 'slam'
+            mark.kind === 'slam' ||
+            mark.kind === 'bait' ||
+            mark.kind === 'collapse'
         ) {
             strikeSound(mark, now);
             continue;
@@ -247,7 +264,67 @@ function playSounds(state) {
         };
     }
 }
+let lastMapAt = -Infinity;
+let rankKey = '';
+function showRank(state) {
+    const entries = state.ranking ?? [];
+    mineRank.hidden = entries.length < 2;
+    if (mineRank.hidden) return;
+    const key = entries.map(({ id, breaks }) => id + ':' + breaks).join(',');
+    if (key === rankKey) return;
+    rankKey = key;
+    const rows = entries.map(({ id, breaks }) => {
+        const row = document.createElement('li');
+        const self = id === state.player.id;
+        row.dataset.self = self;
+        row.textContent = self ? '나' : '광부 ' + id.slice(-4);
+        const score = document.createElement('b');
+        score.textContent = breaks;
+        row.append(score);
+        return row;
+    });
+    mineRankList.replaceChildren(...rows);
+}
+function drawMineMap(state) {
+    if (state.time >= lastMapAt && state.time - lastMapAt < 100) return;
+    lastMapAt = state.time;
+    const ctx = mineMapContext;
+    const cx = mineMap.width / 2;
+    const cy = mineMap.height / 2;
+    const scale = 0.118;
+    ctx.fillStyle = '#243c30';
+    ctx.fillRect(0, 0, mineMap.width, mineMap.height);
+    ctx.fillStyle = '#355041';
+    for (let i = 0; i < mineMap.width; i += 16) ctx.fillRect(i, 0, 1, mineMap.height);
+    for (let i = 0; i < mineMap.height; i += 16) ctx.fillRect(0, i, mineMap.width, 1);
+    for (const rock of state.rocks) {
+        const x = cx + (rock.x - state.player.x) * scale;
+        const y = cy + (rock.y - state.player.y) * scale;
+        const size = rock.guardian || rock.boss ? 4 : rock.lode ? 3 : 1.5;
+        ctx.fillStyle = rock.guardian ? '#ff8172' : minerals[rock.id].color;
+        ctx.fillRect(x - size, y - size, size * 2, size * 2);
+    }
+    for (const other of state.others ?? []) {
+        const x = cx + (other.x - state.player.x) * scale;
+        const y = cy + (other.y - state.player.y) * scale;
+        ctx.fillStyle = '#8ed5dc';
+        ctx.fillRect(x - 2, y - 2, 4, 4);
+    }
+    ctx.fillStyle = '#fff4bb';
+    ctx.beginPath();
+    ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+    ctx.fill();
+}
 function refresh(state) {
+    const miningStep =
+        state.level > 0
+            ? 'delve'
+            : state.stats?.kills > 0 || state.stats?.pickups > 0
+              ? 'gather'
+              : state.target?.actor?.cracks?.some((crack) => crack.armed)
+                ? 'ram'
+                : 'strike';
+    if (arena.dataset.miningStep !== miningStep) arena.dataset.miningStep = miningStep;
     const current = pickaxes[state.level];
     const next = pickaxes[state.level + 1];
     if (renderedLevel !== state.level) {
@@ -276,13 +353,24 @@ function refresh(state) {
         const count = Number.isInteger(state.population) ? ' · ' + state.population + '명' : '';
         updateText(connectionStatus, '채널 ' + channelId + count);
         compass.hidden = !state.center;
+        mineMap.hidden = !state.center;
         if (state.center) {
-            const x = state.center.x - state.player.x;
-            const y = state.center.y - state.player.y;
+            drawMineMap(state);
+            showRank(state);
+            const goal =
+                state.level === 1
+                    ? onlineCopperRavineCenter
+                    : state.level === 2
+                      ? onlineIronRidgeCenter
+                      : state.center;
+            const label =
+                state.level === 1 ? '구리 광맥' : state.level === 2 ? '철 능선' : '대광맥';
+            const x = goal.x - state.player.x;
+            const y = goal.y - state.player.y;
             const distance = Math.hypot(x, y);
             const bearing = view.screenAngle({ x, y });
             compass.style.setProperty('--bearing', bearing + 'rad');
-            updateText(centerDistance, distance < 95 ? '대광맥' : '대광맥 ' + Math.round(distance));
+            updateText(centerDistance, distance < 95 ? label : label + ' ' + Math.round(distance));
         }
     }
 }
