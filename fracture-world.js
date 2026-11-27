@@ -28,6 +28,10 @@ export function walkDelta(x, y, dt) {
     const distance = (walkSpeed * dt) / Math.max(1, Math.hypot(x, y));
     return { x: x * distance, y: y * distance };
 }
+export function secondsAfterHitstop(time, stepSeconds, hitstopUntil = 0) {
+    // A step crossing the deadline spends only its remaining time on movement.
+    return Math.min(stepSeconds, Math.max(0, (time - hitstopUntil) / 1000));
+}
 const emptyDash = { charges: 0, nextChargeAt: 0, until: 0, direction: null };
 const playerRadius = 13;
 const chipSpanLimit = 52;
@@ -68,6 +72,7 @@ const tutorialWarnMs = 1000;
 const recoverMs = 650;
 const impactDrag = 7.5;
 const swingWindupMs = 50;
+const miningHitstopMs = 50;
 const attackBufferMs = 100;
 const swingTotalMs = 245;
 const impulseLimit = 390;
@@ -731,6 +736,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
         const z = target.z === undefined ? 14 : target.z + 4;
         if (target.polygon) target.lastHit = state.time;
         if (action.plan) {
+            session.swing.hitAt = state.time;
             const separated = Boolean(action.plan.loose || action.plan.parts);
             const strength = separated ? 1.05 : 0.68;
             const plan = separated ? action.plan : (target.primed?.plan ?? action.plan);
@@ -756,6 +762,16 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
                 target.stageUntil = state.time + (target.slot.tutorial ? tutorialWarnMs : warnMs);
                 target.chargeDir = unit(session.player.x - target.x, session.player.y - target.y);
                 target.heading = Math.atan2(target.chargeDir.y, target.chargeDir.x);
+            }
+            if (target.polygon) {
+                const holdUntil = state.time + miningHitstopMs;
+                const extension =
+                    holdUntil - Math.max(state.time, target.hitstopUntil ?? state.time);
+                target.stageUntil += extension;
+                target.hitstopUntil = holdUntil;
+                session.player.hitstopUntil = holdUntil;
+                session.swing.holdUntil = holdUntil;
+                session.swing.endsAt += miningHitstopMs;
             }
             mark('cut', spot.x, spot.y, ore, { z, direction, strength });
         } else {
@@ -1024,6 +1040,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             spawnRevision: player.spawnRevision + 1,
             hurtAt: state.time,
             ramRecoverUntil: 0,
+            hitstopUntil: 0,
             kickX: 0,
             kickY: 0,
             impact: null,
@@ -1032,8 +1049,10 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
         session.message = '새 채굴터에서 다시 시작했어요.';
         return true;
     }
-    function stepMobs(dt) {
+    function stepMobs(stepSeconds) {
         for (const rock of state.rocks) {
+            const dt = secondsAfterHitstop(state.time, stepSeconds, rock.hitstopUntil);
+            if (!dt) continue;
             if (
                 online &&
                 rock.stage === 'roam' &&
@@ -1186,8 +1205,13 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             }
             const { x = 0, y = 0, attack = false } = inputs.get(id) ?? {};
             if (attack) session.pending = state.time;
-            advanceImpact(session.player, dt);
-            session.moving = walkPlayer(session, x, y, dt);
+            const moveSeconds = secondsAfterHitstop(state.time, dt, session.player.hitstopUntil);
+            if (!moveSeconds) {
+                session.moving = false;
+                continue;
+            }
+            advanceImpact(session.player, moveSeconds);
+            session.moving = walkPlayer(session, x, y, moveSeconds);
         }
         if (relocated) refreshChunks();
         stepMobs(dt);
@@ -1230,8 +1254,8 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
     }
     function visualSwing(swing) {
         if (!swing) return null;
-        const { at, contactAt, endsAt, contacted } = swing;
-        return { at, contactAt, endsAt, contacted };
+        const { at, contactAt, endsAt, contacted, hitAt, holdUntil } = swing;
+        return { at, contactAt, endsAt, contacted, hitAt, holdUntil, rockUid: swing.target?.uid };
     }
     function roundWire(value) {
         return Math.round(value * 100) / 100;
@@ -1258,6 +1282,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             angle,
             boss,
             impact,
+            hitstopUntil,
             stage,
             chargeDir,
             chargeDistance,
@@ -1276,6 +1301,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             angle,
             boss,
             impact,
+            hitstopUntil,
             stage,
             chargeDir,
             chargeDistance,

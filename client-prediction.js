@@ -1,5 +1,11 @@
 import { createFracturePhysics } from './fracture-physics.js';
-import { clockToleranceMs, tickRate, walkDelta, walkSpeed } from './fracture-world.js';
+import {
+    clockToleranceMs,
+    secondsAfterHitstop,
+    tickRate,
+    walkDelta,
+    walkSpeed,
+} from './fracture-world.js';
 
 const maxLeadMs = 120;
 const playerRadius = 13;
@@ -62,8 +68,15 @@ export function createMovementPrediction(Rapier, serverTickRate = tickRate) {
     }
     function step() {
         time += tickMs;
-        if (player.hp === 0 || time < (player.ramRecoverUntil ?? 0) || (!held.x && !held.y)) return;
-        move(held.x, held.y, tickMs / 1000);
+        const moveSeconds = secondsAfterHitstop(time, tickMs / 1000, player.hitstopUntil);
+        if (
+            player.hp === 0 ||
+            time < (player.ramRecoverUntil ?? 0) ||
+            !moveSeconds ||
+            (!held.x && !held.y)
+        )
+            return;
+        move(held.x, held.y, moveSeconds);
         const length = Math.hypot(held.x, held.y);
         player.faceX = held.x / length;
         player.faceY = held.y / length;
@@ -89,15 +102,16 @@ export function createMovementPrediction(Rapier, serverTickRate = tickRate) {
         advance(now);
         const { x, y } = player;
         const elapsed = Math.max(0, Math.min(tickMs, Math.min(now, limit) - frameAt));
+        const hold = Math.max(0, (player.hitstopUntil ?? 0) - time);
         const input = pending.at(-1) ?? held;
         if (
             player.hp === 0 ||
             time + elapsed < (player.ramRecoverUntil ?? 0) ||
             (!input.x && !input.y) ||
-            elapsed < clockToleranceMs
+            elapsed - hold < clockToleranceMs
         )
             return { x, y };
-        move(input.x, input.y, elapsed / 1000);
+        move(input.x, input.y, (elapsed - hold) / 1000);
         const display = { x: player.x, y: player.y };
         player.x = x;
         player.y = y;
@@ -124,6 +138,8 @@ export function createMovementPrediction(Rapier, serverTickRate = tickRate) {
                 y: state.player.y,
                 spawnRevision: state.player.spawnRevision,
             };
+            const stopped = state.time < (state.player.hitstopUntil ?? 0);
+            if (stopped) displayed = null;
             if (
                 authoritative &&
                 (nextAuthority.spawnRevision !== authoritative.spawnRevision ||
@@ -145,8 +161,9 @@ export function createMovementPrediction(Rapier, serverTickRate = tickRate) {
             physics.sync(player);
             time = state.time;
             limit = now + maxLeadMs;
-            const replayMs = pending.length ? clamp(now - pending[0].at, 0, maxLeadMs) : 0;
-            frameAt = now - replayMs - (pending.length ? tickMs : 0);
+            const replayMs =
+                !stopped && pending.length ? clamp(now - pending[0].at, 0, maxLeadMs) + tickMs : 0;
+            frameAt = now - replayMs;
             const pose = presentationPose(now);
 
             const dx = displayed ? displayed.x - pose.x : 0;
@@ -180,6 +197,10 @@ export function createMovementPrediction(Rapier, serverTickRate = tickRate) {
                 faceX: player.faceX,
                 faceY: player.faceY,
             };
+        },
+        continueFrom(position, now) {
+            displayed = { x: position.x, y: position.y, at: now };
+            correction = null;
         },
         dispose: physics.dispose,
     };

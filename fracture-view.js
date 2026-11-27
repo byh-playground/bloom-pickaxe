@@ -210,6 +210,7 @@ export function createFractureView(canvas, touchControls) {
     const mainContext = canvas.getContext('2d', { alpha: false });
     let ctx = mainContext;
     const faceMemory = new WeakMap();
+    const rockAnimationClocks = new WeakMap();
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     let layout = null;
     let viewport = null;
@@ -936,11 +937,32 @@ export function createFractureView(canvas, touchControls) {
         return record;
     }
 
+    function pausedBetween(from, to, start, end) {
+        return end === undefined ? 0 : Math.max(0, Math.min(to, end) - Math.max(from, start));
+    }
+
+    function rockFaceTime(ore, time) {
+        if (ore.hitstopUntil === undefined) return time;
+        let clock = rockAnimationClocks.get(ore);
+        if (!clock || time < clock.time) {
+            clock = { time: Math.min(time, ore.lastHit), pausedMs: 0 };
+            rockAnimationClocks.set(ore, clock);
+        }
+        clock.pausedMs += pausedBetween(clock.time, time, ore.lastHit, ore.hitstopUntil);
+        clock.time = time;
+        return time - clock.pausedMs;
+    }
+
     function rock(ore, state) {
         const color = minerals[ore.id];
         const pal = STONE[ore.id] ?? STONE.plain;
-        const age = state.time - (ore.lastHit ?? -Infinity);
-        const bodyRecoil = recoil(ore.impact, state.time, 4.8);
+        const time = state.time;
+        const age = time - (ore.lastHit ?? -Infinity);
+        const impactAt = ore.impact?.at ?? 0;
+        const recoilTime =
+            time - Math.max(0, Math.min(time, ore.hitstopUntil ?? impactAt) - impactAt);
+        const faceTime = rockFaceTime(ore, time);
+        const bodyRecoil = recoil(ore.impact, recoilTime, 4.8);
         if (!ore.impact && age >= 0 && age < 120)
             bodyRecoil.x = Math.sin(age / 10) * 2 * (1 - age / 120);
         const nearby = Math.hypot(state.player.x - ore.x, state.player.y - ore.y) < 140;
@@ -1017,7 +1039,7 @@ export function createFractureView(canvas, touchControls) {
                     return P(w, zAt(w) + 1);
                 });
             },
-            face: (surface) => mobFace(ore, state.time, pal, toWorld, surface, Boolean(distantKey)),
+            face: (surface) => mobFace(ore, faceTime, pal, toWorld, surface, Boolean(distantKey)),
         });
         const center = toWorld(detail.center);
         const active =
@@ -1047,7 +1069,7 @@ export function createFractureView(canvas, touchControls) {
             }
             ctx.closePath();
             ctx.clip();
-            mobFace(ore, state.time, pal, toWorld, {
+            mobFace(ore, faceTime, pal, toWorld, {
                 P: project,
                 zAt: (p) =>
                     FACE_Z +
@@ -1282,6 +1304,7 @@ export function createFractureView(canvas, touchControls) {
                 x,
                 y,
                 time,
+                pausedMs: 0,
                 stride: 0,
                 walk: 0,
                 side: facing.x < 0 ? -1 : 1,
@@ -1290,25 +1313,56 @@ export function createFractureView(canvas, touchControls) {
             miners.set(player, minerMotion);
         }
         if (time > minerMotion.time) {
-            const dt = time - minerMotion.time;
+            const paused = pausedBetween(
+                minerMotion.time,
+                time,
+                swingState?.hitAt,
+                swingState?.holdUntil,
+            );
+            const dt = time - minerMotion.time - paused;
             const traveled = Math.hypot(x - minerMotion.x, y - minerMotion.y);
-            const speed = traveled / dt;
-            const target = traveled > 55 ? 0 : Math.min(1, speed * 5);
-            minerMotion.walk += (target - minerMotion.walk) * (1 - Math.exp(-dt / 55));
-            minerMotion.stride += traveled > 55 ? 0 : traveled / 5.4;
+            if (dt > 0) {
+                const speed = traveled / dt;
+                const target = traveled > 55 ? 0 : Math.min(1, speed * 5);
+                minerMotion.walk += (target - minerMotion.walk) * (1 - Math.exp(-dt / 55));
+                minerMotion.stride += traveled > 55 ? 0 : traveled / 5.4;
+            }
+            minerMotion.pausedMs += paused;
             Object.assign(minerMotion, { x, y, time });
         }
+        const appearanceTime = time - minerMotion.pausedMs;
         if (Math.abs(facing.x) > 0.18) minerMotion.side = Math.sign(facing.x);
         const { side, walk, stride } = minerMotion;
         const step = dead ? 0 : Math.cos(stride) * walk;
-        const breathing = dead ? 0 : Math.sin(time / 390) * 0.5;
-        const swingAge = !dead && swingState ? time - swingState.contactAt : Infinity;
+        const breathing = dead ? 0 : Math.sin(appearanceTime / 390) * 0.5;
+        const contactAt = swingState?.hitAt ?? swingState?.contactAt;
+        const swingAge =
+            !dead && swingState
+                ? time < contactAt
+                    ? time - contactAt
+                    : Math.max(0, time - (swingState.holdUntil ?? contactAt))
+                : Infinity;
         const windup =
             swingAge < 0 ? (time - swingState.at) / (swingState.contactAt - swingState.at) : 1;
         const recovery = !dead && swingState && swingAge >= 0 ? 1 - Math.min(1, swingAge / 145) : 0;
-        const follow = recovery ** 2;
+        const landed = swingState?.hitAt !== undefined && swingAge >= 0 && !dead;
+        const brace = landed ? Math.max(0, 1 - swingAge / 120) : 0;
+        const follow = Math.max(recovery ** 2, brace);
+        const bounce =
+            landed && swingAge > 37 && swingAge < 160
+                ? Math.sin((Math.PI * (swingAge - 37)) / 123)
+                : 0;
+        const load = swingAge < 0 ? Math.max(0, Math.sin(Math.PI * windup)) : 0;
         const hurt = !dead && time - (player.hurtAt ?? -Infinity) < 220;
-        const kick = recoil(dead ? null : player.impact, time, 5.4);
+        const kickTime =
+            time -
+            pausedBetween(
+                player.impact?.at ?? time,
+                time,
+                swingState?.hitAt,
+                swingState?.holdUntil,
+            );
+        const kick = recoil(dead ? null : player.impact, kickTime, 5.4);
         const ink = '#3d3230';
         const boot = '#614538';
         const lamp = '#fff4c6';
@@ -1340,8 +1394,11 @@ export function createFractureView(canvas, touchControls) {
             ellipse(ctx, foot + 2 + cycle * 4, -4 - lift, 3.5, 1.1, '#a37a46');
         }
 
-        ctx.translate(3.5 * follow, -Math.abs(step) * 2 + breathing + 2 * follow);
-        ctx.rotate(0.19 * follow + step * 0.045);
+        ctx.translate(
+            7 * brace - 5 * load,
+            -Math.abs(step) * 2 + breathing + 5 * brace - 3 * bounce,
+        );
+        ctx.rotate(0.31 * brace - 0.17 * load - 0.19 * bounce + step * 0.045);
         ctx.scale(1 + 0.08 * follow, 1 - 0.09 * follow);
         minerPart('backpack', '#427063', '#34473c');
         minerPart('packFlap', '#77926b', '#34473c', 1.5);
@@ -1381,7 +1438,7 @@ export function createFractureView(canvas, touchControls) {
         minerPart('face', '#edb38c', ink);
         ellipse(ctx, 11, -27, 3.8, 1.9, '#e88372');
 
-        const blink = time % 2450 > 2340;
+        const blink = appearanceTime % 2450 > 2340;
         if (dead) {
             ctx.beginPath();
             for (const eye of [-4, 7]) {
@@ -1450,11 +1507,17 @@ export function createFractureView(canvas, touchControls) {
         ellipse(ctx, 8.5, -46.5, 1.7, 1.4, '#fffdf0');
 
         ctx.save();
-        ctx.translate(16 + follow * 4, -14 - follow * 2);
+        const hand = { x: 16 + brace * 8 - load * 7, y: -14 - load * 9 - bounce * 11 };
+        const arm = [{ x: 7, y: -17 }, { x: 14, y: hand.y + 5 }, hand];
+        line(ctx, arm, ink, 12);
+        line(ctx, arm, '#7397a0', 7);
+        ctx.translate(hand.x, hand.y);
         const direction = Math.atan2(facing.x * side, -facing.y);
         const angle =
             !dead && swingState
-                ? direction - Math.sin(Math.PI * windup) * 1.25 + recovery * 0.44
+                ? direction -
+                  load * 1.85 +
+                  (landed ? 0.07 * brace - 1.05 * bounce : recovery * 0.44)
                 : 1.08;
         if (swingAge >= -10 && swingAge <= 60) {
             ctx.save();
@@ -1569,6 +1632,71 @@ export function createFractureView(canvas, touchControls) {
                 [point(0.76, 0), point(0, 0.31), point(-0.44, -0.03), point(0, -0.27)],
                 bright,
             );
+        }
+        if (mark.kind === 'cut' && age < 275) {
+            const t = Math.max(0, age / 275);
+            const heat = 1 - t;
+            const radius = 14 + (1 - heat ** 1.8) * 48;
+            const x = contact.x,
+                y = contact.y;
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.globalAlpha = heat * 0.58;
+            const halo = ctx.createRadialGradient(x, y, 2, x, y, 34 + radius * 0.4);
+            halo.addColorStop(0, '#ffcf65');
+            halo.addColorStop(0.32, '#ff9a3980');
+            halo.addColorStop(1, '#ff9a3900');
+            ellipse(ctx, x, y, 34 + radius * 0.4, 34 + radius * 0.4, halo);
+            ctx.globalAlpha = heat ** 2 * 0.83;
+            ctx.lineWidth = 2.8 * heat + 0.7;
+            ellipse(
+                ctx,
+                x + dx * radius * 0.18,
+                y + dy * radius * 0.18,
+                radius,
+                radius * 0.62,
+                null,
+                '#ffcf5b',
+            );
+            if (age > 35) {
+                ctx.globalAlpha = heat * 0.42;
+                ctx.lineWidth = 1.3;
+                ellipse(ctx, x, y, radius * 0.72, radius * 0.49, null, '#fff0ab');
+            }
+            if (age < 106) {
+                const flash = (1 - age / 106) ** 0.7;
+                ctx.globalAlpha = flash * 0.93;
+                const angle = Math.atan2(dy, dx);
+                polygon(
+                    ctx,
+                    Array.from({ length: 16 }, (_, i) => {
+                        const a = angle + (i * Math.PI) / 8;
+                        const r = i % 2 ? 7 : (i % 4 ? 26 : 38) * (0.7 + flash * 0.3);
+                        return { x: x + Math.cos(a) * r, y: y + Math.sin(a) * r };
+                    }),
+                    '#fff8cc',
+                );
+            }
+            const sparks = seeded(hashPoint(mark.x, mark.y));
+            for (let i = 0; i < 15; i++) {
+                const angle = (i / 15) * Math.PI * 2 + (sparks() - 0.5) * 0.6;
+                const travel = (20 + sparks() * 55) * (1 - heat ** 2) + 6;
+                const vx = Math.cos(angle),
+                    vy = Math.sin(angle);
+                const tx = x + vx * travel + dx * t * 15;
+                const ty = y + vy * travel - t * (1 - t) * 26;
+                ctx.globalAlpha = heat ** 1.35 * 0.93;
+                line(
+                    ctx,
+                    [
+                        { x: tx - vx * (6 + heat * 8), y: ty - vy * (6 + heat * 8) },
+                        { x: tx, y: ty },
+                    ],
+                    i % 3 ? '#ffbe4e' : '#fff7d0',
+                    1 + heat * 1.8,
+                );
+            }
+            ctx.restore();
         }
         const dustAge = age / 350;
         if (!blocked && dustAge < 1) {

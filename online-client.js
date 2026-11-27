@@ -55,7 +55,7 @@ export function createPlayback(delayMs = playbackDelayMs, metrics) {
     let network = false;
     let started = false;
 
-    function actors(first, second, weight, prefix, identity, visible) {
+    function actors(first, second, timing, prefix, identity, visible) {
         const models = [];
         for (const actor of first.values()) {
             const key = identity(actor);
@@ -70,6 +70,12 @@ export function createPlayback(delayMs = playbackDelayMs, metrics) {
                 actor.spawnRevision === next.spawnRevision &&
                 Math.hypot(actor.x - next.x, actor.y - next.y) <= 350
             ) {
+                const paused = actor.hitstopUntil > timing.from;
+                const weight = !paused
+                    ? timing.weight
+                    : timing.to <= actor.hitstopUntil
+                      ? 0
+                      : Math.max(0, (time - actor.hitstopUntil) / (timing.to - actor.hitstopUntil));
                 model.x = mix(actor.x, next.x, weight);
                 model.y = mix(actor.y, next.y, weight);
                 if (Number.isFinite(actor.z) && Number.isFinite(next.z))
@@ -145,17 +151,18 @@ export function createPlayback(delayMs = playbackDelayMs, metrics) {
             ? overdue * (1 - overdue / (2 * maxExtrapolationMs))
             : overdue;
         const weight = first === second ? 0 : poseTime / (second.state.time - first.state.time);
+        const timing = { from: first.state.time, to: second.state.time, weight };
         const visible = new Set();
         const [player, ...others] = actors(
             first.players,
             second.players,
-            weight,
+            timing,
             'p:',
             byId,
             visible,
         );
-        const rocks = actors(first.rocks, second.rocks, weight, 'r:', byUid, visible);
-        const shards = actors(first.shards, second.shards, weight, 's:', byId, visible);
+        const rocks = actors(first.rocks, second.rocks, timing, 'r:', byUid, visible);
+        const shards = actors(first.shards, second.shards, timing, 's:', byId, visible);
         for (const key of display.keys()) if (!visible.has(key)) display.delete(key);
         const actorFor = (actor) =>
             actor?.uid ? display.get('r:' + actor.uid) : display.get('s:' + actor?.id);
@@ -229,6 +236,8 @@ export function createOnlineClient(
     let playback;
     let players, rocks, shards, marks;
     let Rapier, prediction;
+    let displayedPlayer;
+    let miningTransition;
     const sentInputs = new Map();
     let previousInput = { x: 0, y: 0 };
     const info = () => ({ phase, channelId, playerId });
@@ -302,6 +311,8 @@ export function createOnlineClient(
         channelId = '';
         playerId = '';
         state = null;
+        displayedPlayer = undefined;
+        miningTransition = undefined;
         seq = 0;
         playback = createPlayback(playbackDelayMs, metrics);
         sentInputs.clear();
@@ -380,12 +391,42 @@ export function createOnlineClient(
         sample(now) {
             const scene = playback?.sample(now);
             if (!scene) return null;
-            const local =
-                scene.player.hp !== 0 && scene.player.spawnRevision === state?.player.spawnRevision
-                    ? prediction?.sample(now)
-                    : null;
-            if (local) return { ...scene, player: { ...scene.player, ...local } };
-            return scene;
+            if (displayedPlayer?.spawnRevision !== scene.player.spawnRevision) {
+                displayedPlayer = undefined;
+                miningTransition = undefined;
+            }
+            const canPredict =
+                prediction &&
+                scene.player.hp !== 0 &&
+                scene.player.spawnRevision === state?.player.spawnRevision;
+            const swing = scene.swing?.rockUid ? scene.swing : state?.swing;
+            let pose = scene.player;
+            if (canPredict && swing?.rockUid) {
+                // Align before contact, then use one clock for the striking player and ore.
+                miningTransition ??= {
+                    at: scene.time,
+                    x: (displayedPlayer?.x ?? pose.x) - pose.x,
+                    y: (displayedPlayer?.y ?? pose.y) - pose.y,
+                };
+                const left = Math.max(0, swing.contactAt - scene.time);
+                const blend = Math.min(
+                    1,
+                    left / Math.max(1, swing.contactAt - miningTransition.at),
+                );
+                if (blend > 0) {
+                    pose = {
+                        ...pose,
+                        x: pose.x + miningTransition.x * blend,
+                        y: pose.y + miningTransition.y * blend,
+                    };
+                }
+            } else {
+                if (canPredict && miningTransition) prediction.continueFrom(displayedPlayer, now);
+                miningTransition = undefined;
+                if (canPredict) pose = { ...pose, ...prediction.sample(now) };
+            }
+            displayedPlayer = Object.assign(displayedPlayer ?? {}, pose);
+            return { ...scene, player: displayedPlayer };
         },
     };
 }
