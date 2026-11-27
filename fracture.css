@@ -358,6 +358,82 @@ button:disabled {
     gap: 4px;
     border-top: 1px solid var(--panel-rule);
 }
+#expedition-boss:not([hidden]) {
+    position: absolute;
+    top: calc(var(--safe-top) + 52px);
+    left: var(--side);
+    width: min(232px, calc(100% - 24px));
+    display: grid;
+    justify-items: center;
+    gap: 5px;
+    box-sizing: border-box;
+    padding: 9px 13px;
+    border: 2px solid #d5a19c;
+    border-radius: 12px;
+    background: #352d43ef;
+    box-shadow: 0 4px 0 #25233170;
+    color: #fff0dc;
+    font-size: 14px;
+    pointer-events: none;
+}
+#expedition-boss[data-exposed='true'] {
+    border-color: #9fe5d5;
+    background: #2d4b42ef;
+}
+#expedition-boss[data-completed='true'] {
+    border-color: #f0d19a;
+}
+#expedition-meter:not([hidden]) {
+    position: relative;
+    width: 100%;
+    height: 9px;
+    overflow: hidden;
+    border: 1px solid #201c29;
+    border-radius: 4px;
+    background: #221d2a;
+}
+#expedition-meter::before,
+#expedition-meter::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+}
+#expedition-meter::before {
+    width: calc(100% * var(--plates, 0));
+    background: linear-gradient(90deg, #9e568e, #edac9f);
+    transition: width 140ms ease-out;
+}
+#expedition-boss[data-exposed='true'] #expedition-meter::before {
+    background: #94ddc5;
+}
+#expedition-meter::after {
+    background: repeating-linear-gradient(
+        90deg,
+        transparent 0 calc(var(--division, 20%) - 2px),
+        #211e29 calc(var(--division, 20%) - 2px) var(--division, 20%)
+    );
+}
+#expedition-opening {
+    color: #eed4c7;
+    font-weight: 600;
+    font-size: 12px;
+}
+#expedition-boss[data-exposed='true'] #expedition-opening {
+    color: #bcf6e8;
+}
+@media (max-width: 640px) and (orientation: portrait) {
+    #expedition-boss:not([hidden]) {
+        top: calc(var(--safe-top) + 135px);
+        left: var(--side);
+        transform: none;
+        width: min(178px, calc(50% - var(--side)));
+    }
+}
+@media (max-height: 460px) {
+    #expedition-boss:not([hidden]) {
+        top: var(--safe-top);
+    }
+}
 #mine-rank > strong {
     color: var(--gold);
 }
@@ -442,8 +518,11 @@ button:disabled {
     padding: 4px 5px;
     border: 1px solid #997846;
     border-radius: 6px;
-    background: #f6e2af;
-    box-shadow: inset 0 -2px #c39a65;
+    background:
+        linear-gradient(90deg, var(--ore) 0 var(--progress, 0%), #d9bd89 var(--progress, 0%) 100%)
+            bottom / 100% 4px no-repeat,
+        #f6e2af;
+    padding-bottom: 7px;
     color: var(--ink);
     font-size: 11px;
     font-weight: 750;

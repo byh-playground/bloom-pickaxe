@@ -20,6 +20,12 @@ const onlinePanel = get('online-panel');
 const connectionStatus = get('connection-status');
 const compass = get('center-compass');
 const centerDistance = get('center-distance');
+const expeditionBoss = get('expedition-boss');
+const expeditionPlates = get('expedition-plates');
+const expeditionMeter = get('expedition-meter');
+const expeditionOpening = get('expedition-opening');
+const expeditionVictoryMs = 2400;
+let expeditionVictoryAt = -Infinity;
 const mineMap = get('mine-map');
 const mineMapContext = mineMap.getContext('2d');
 const mineRank = get('mine-rank');
@@ -33,8 +39,8 @@ const ingredients = Object.entries(minerals).map(([id, ore]) => {
     const title = document.createElement('span');
     const count = document.createElement('b');
     gem.className = 'chip';
-    gem.style.setProperty('--ore', ore.color);
-    gem.style.setProperty('--ore-light', ore.light);
+    item.style.setProperty('--ore', ore.color);
+    item.style.setProperty('--ore-light', ore.light);
     gem.setAttribute('aria-hidden', 'true');
     title.textContent = ore.name;
     item.append(gem, title, count);
@@ -140,6 +146,12 @@ function updateConnection({ phase, channelId } = { phase: 'unavailable' }) {
     onlinePanel.hidden = false;
     onlinePanel.dataset.phase = phase;
     compass.hidden = phase !== 'online';
+    if (phase !== 'online') {
+        expeditionBoss.hidden = true;
+        expeditionVictoryAt = -Infinity;
+        mineMap.hidden = true;
+        mineRank.hidden = true;
+    }
     resetButton.hidden = phase === 'online' || phase === 'connecting';
     resetButton.title = '다시 연결';
     resetButton.setAttribute('aria-label', '다시 연결');
@@ -238,12 +250,15 @@ function playSounds(state) {
             mark.kind === 'hurt' ||
             mark.kind === 'slam' ||
             mark.kind === 'bait' ||
+            mark.kind === 'bossPlate' ||
+            mark.kind === 'bossFall' ||
+            mark.kind === 'goldBurst' ||
             mark.kind === 'collapse'
         ) {
             strikeSound(mark, now);
             continue;
         }
-        const frequency = { collect: 705, upgrade: 825 }[mark.kind];
+        const frequency = { collect: 705, upgrade: 825, bossVictory: 523 }[mark.kind];
         if (!frequency) continue;
         const osc = sound.createOscillator(),
             gain = sound.createGain();
@@ -304,6 +319,12 @@ function drawMineMap(state) {
         ctx.fillStyle = rock.guardian ? '#ff8172' : minerals[rock.id].color;
         ctx.fillRect(x - size, y - size, size * 2, size * 2);
     }
+    for (const passage of state.expedition?.passages ?? []) {
+        const x = cx + (passage.x - state.player.x) * scale;
+        const y = cy + (passage.y - state.player.y) * scale;
+        ctx.fillStyle = passage.open ? '#8ee3c8' : '#d59173';
+        ctx.fillRect(x - 3, y - 3, 6, 6);
+    }
     for (const other of state.others ?? []) {
         const x = cx + (other.x - state.player.x) * scale;
         const y = cy + (other.y - state.player.y) * scale;
@@ -314,6 +335,73 @@ function drawMineMap(state) {
     ctx.beginPath();
     ctx.arc(cx, cy, 3, 0, Math.PI * 2);
     ctx.fill();
+}
+function showExpeditionBoss(state) {
+    const boss = state.expedition?.boss;
+    if (!state.expedition || state.time < expeditionVictoryAt) expeditionVictoryAt = -Infinity;
+    const victory = state.marks.findLast(
+        (mark) => mark.kind === 'bossVictory' && mark.at <= state.time,
+    );
+    if (victory) expeditionVictoryAt = Math.max(expeditionVictoryAt, victory.at);
+    const justWon = state.time - expeditionVictoryAt < expeditionVictoryMs;
+    const returned = state.expedition?.completed && state.expedition.kind === 'lode';
+    const readyToReturn = state.expedition?.completed && state.expedition.kind === 'passage';
+    const completed = !boss && (justWon || readyToReturn);
+    expeditionBoss.hidden = !boss && !completed && !returned;
+    if (expeditionBoss.hidden) return;
+    const seconds = Math.ceil(((boss?.exposedUntilMs ?? 0) - state.time) / 100) / 10;
+    const exposed = seconds > 0;
+    if (expeditionBoss.dataset.exposed !== String(exposed))
+        expeditionBoss.dataset.exposed = exposed;
+    if (expeditionBoss.dataset.completed !== String(completed || Boolean(returned)))
+        expeditionBoss.dataset.completed = completed || Boolean(returned);
+    expeditionMeter.hidden = !boss;
+    if (boss) {
+        const unitCount = boss.plates ? boss.maxPlates : boss.coreHits;
+        const remaining = boss.plates || boss.coreHp;
+        const portion = String(remaining / unitCount);
+        if (expeditionMeter.style.getPropertyValue('--plates') !== portion)
+            expeditionMeter.style.setProperty('--plates', portion);
+        const division = 100 / unitCount + '%';
+        if (expeditionMeter.style.getPropertyValue('--division') !== division)
+            expeditionMeter.style.setProperty('--division', division);
+    }
+    updateText(
+        expeditionPlates,
+        boss
+            ? boss.plates
+                ? '대광맥 · 방어판 ' + boss.plates + '/' + boss.maxPlates
+                : '대광맥 코어 · ' + boss.coreHp + '/' + boss.coreHits
+            : returned
+              ? '원정 완주 · 다이아 곡괭이'
+              : '대광맥 격파',
+    );
+    updateText(
+        expeditionOpening,
+        !boss || boss.coreHp === 0
+            ? returned
+                ? '귀환 캠프를 나침반에 표시했어요'
+                : readyToReturn
+                  ? '귀환 통로가 열렸어요'
+                  : '거대 결정이 무너졌어요'
+            : exposed
+              ? '약점 노출 ' + seconds.toFixed(1) + '초'
+              : boss.pulsing
+                ? boss.coreHp === 1
+                    ? '최후 파동 · 낙석과 바닥 표시를 피하세요'
+                    : '코어 파동 · 바닥 표시를 피하세요'
+                : boss.quaking
+                  ? boss.plates === 0
+                      ? '코어가 깨어나요 · 낙석을 피하세요'
+                      : '연속 낙석 · 마지막 충격 뒤에 반격하세요'
+                  : boss.plates === 0
+                    ? '코어가 두 번 돌진한 뒤 파동을 일으켜요'
+                    : boss.plates === 1
+                      ? '붕괴 직전 · 낙석 범위를 피하세요'
+                      : boss.plates <= 3
+                        ? '균열이 퍼졌어요 · 낙석 주의'
+                        : '돌진이 끝나면 약점이 열려요',
+    );
 }
 function refresh(state) {
     const miningStep =
@@ -338,40 +426,52 @@ function refresh(state) {
         if (item.hidden) continue;
         const need = next?.recipe[id];
         updateText(count, need ? state.bag[id] + '/' + need : state.bag[id]);
+        const progress = need ? Math.round(Math.min(1, state.bag[id] / need) * 100) + '%' : '';
+        if (item.style.getPropertyValue('--progress') !== progress)
+            item.style.setProperty('--progress', progress);
     }
     updateText(
         status,
         (online && online.info().phase !== 'online'
             ? '연결이 끊겼어요. 다시 연결해 주세요.'
             : state.message) ||
-            (touchScreen.matches
-                ? '오른쪽 버튼으로 금 내기 · 왼쪽 스틱으로 밀어 깨기'
-                : '클릭으로 금 내기 · WASD로 밀어 깨기'),
+            (state.level > 0
+                ? ''
+                : touchScreen.matches
+                  ? '오른쪽 버튼으로 금 내기 · 왼쪽 스틱으로 밀어 깨기'
+                  : '클릭으로 금 내기 · WASD로 밀어 깨기'),
     );
-    if (online && online.info().phase === 'online') {
+    const { center, expedition } = state;
+    const compactFight = Boolean(expedition?.boss) && !expedition.completed;
+    if (online) {
+        if (online.info().phase !== 'online') return;
         const { channelId } = online.info();
         const count = Number.isInteger(state.population) ? ' · ' + state.population + '명' : '';
         updateText(connectionStatus, '채널 ' + channelId + count);
-        compass.hidden = !state.center;
-        mineMap.hidden = !state.center;
-        if (state.center) {
-            drawMineMap(state);
-            showRank(state);
-            const goal =
-                state.level === 1
-                    ? onlineCopperRavineCenter
-                    : state.level === 2
-                      ? onlineIronRidgeCenter
-                      : state.center;
-            const label =
-                state.level === 1 ? '구리 광맥' : state.level === 2 ? '철 능선' : '대광맥';
-            const x = goal.x - state.player.x;
-            const y = goal.y - state.player.y;
-            const distance = Math.hypot(x, y);
-            const bearing = view.screenAngle({ x, y });
-            compass.style.setProperty('--bearing', bearing + 'rad');
-            updateText(centerDistance, distance < 95 ? label : label + ' ' + Math.round(distance));
-        }
+        if (compactFight) mineRank.hidden = true;
+        else showRank(state);
+    }
+    compass.hidden = compactFight || (!center && !expedition);
+    mineMap.hidden = compass.hidden;
+    showExpeditionBoss(state);
+    if (!compass.hidden) {
+        drawMineMap(state);
+        const goal =
+            expedition ??
+            (state.level === 1
+                ? onlineCopperRavineCenter
+                : state.level === 2
+                  ? onlineIronRidgeCenter
+                  : center);
+        const label =
+            expedition?.label ??
+            (state.level === 1 ? '구리 광맥' : state.level === 2 ? '철 능선' : '대광맥');
+        const x = goal.x - state.player.x;
+        const y = goal.y - state.player.y;
+        const distance = Math.hypot(x, y);
+        const bearing = view.screenAngle({ x, y });
+        compass.style.setProperty('--bearing', bearing + 'rad');
+        updateText(centerDistance, distance < 95 ? label : label + ' ' + Math.round(distance));
     }
 }
 

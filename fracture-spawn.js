@@ -1,3 +1,12 @@
+import {
+    createExpedition,
+    expeditionGoldSector,
+    goldLodeLocal,
+    goldSuppliesLocal,
+    upperGoldSector,
+    upperGoldLocal,
+} from './fracture-expedition.js';
+
 const regions = [
     [81, 17, 2, 0, 0],
     [35, 36, 23, 6, 0],
@@ -10,6 +19,9 @@ export const onlineSize = {
     height: worldSector.height * 100,
 };
 export const worldCenter = { x: onlineSize.width / 2, y: onlineSize.height / 2 };
+const passageClearings = createExpedition(worldSector, worldCenter, true).passages.flatMap(
+    (passage) => [passage, passage.exit],
+);
 export const onlineStarter = { x: worldCenter.x + 221, y: worldSector.height * 2 + 477 };
 const starterNeighbor = { x: 53, y: 476, region: 0, guaranteed: 0, tutorial: true };
 export const copperRavineCenter = { x: 449, y: 177 };
@@ -44,6 +56,24 @@ const ironLode = [
     ...ironDeposit,
     { x: 591, y: 335, region: 1, guaranteed: 2, lode: 'iron', guardian: true },
 ];
+const goldLode = [
+    { ...goldLodeLocal, guaranteed: 3, yield: 14 },
+    { x: 424, y: 448, guaranteed: 3, yield: 14 },
+    { x: 546, y: 322, guaranteed: 3, guardian: true, yield: 24 },
+    { ...goldSuppliesLocal.stone, guaranteed: 0 },
+    { ...goldSuppliesLocal.copper, guaranteed: 1 },
+    { ...goldSuppliesLocal.iron, guaranteed: 2 },
+].map((slot) => ({ ...slot, region: 1, lode: 'gold' }));
+const upperGoldLode = [
+    { ...upperGoldLocal, guaranteed: 3, yield: 14 },
+    { x: 293, y: 190, guaranteed: 3, yield: 14 },
+    { x: 229, y: 285, guaranteed: 3, guardian: true, yield: 22 },
+].map((slot) => ({ ...slot, region: 1, lode: 'gold', vein: 'dawn' }));
+const bossLocal = [
+    { x: -138, y: 30 },
+    { x: -19, y: 154 },
+    { x: 154, y: 155 },
+].map((slot) => ({ ...slot, region: 2, guaranteed: 3, lode: 'arena', anchor: true }));
 const nearLode = (group, x, y) =>
     group.some((slot) => Math.hypot(slot.x - x, slot.y - y) < lodeClearance);
 
@@ -71,6 +101,8 @@ export function sectorSlots(seed, sx, sy) {
         const x = originX + ax + (tutorial ? 0 : (random() - 0.5) * 65);
         const y = originY + ay + (tutorial ? 0 : (random() - 0.5) * 65);
         if (Math.hypot(x - worldCenter.x, y - worldCenter.y) < 160) continue;
+        if (passageClearings.some((point) => Math.hypot(x - point.x, y - point.y) < lodeClearance))
+            continue;
         const depth = Math.max(
             Math.abs(x - worldCenter.x) / worldCenter.x,
             Math.abs(y - worldCenter.y) / worldCenter.y,
@@ -87,7 +119,21 @@ export function sectorSlots(seed, sx, sy) {
         if (i === 6 && region === 0 && (sx + sy) % 2 === 0)
             slots.push({ x: x - 106, y, region, seed: Math.floor(random() * 2 ** 32) });
     }
-    const lode = sx === 50 && sy === 2 ? copperRegion : sx === 50 && sy === 3 ? ironLode : null;
+    const goldSector = sx === expeditionGoldSector.x && sy === expeditionGoldSector.y;
+    const upperGold = sx === upperGoldSector.x && sy === upperGoldSector.y;
+    const bossSector = sx === 50 && sy === 50;
+    const lode =
+        sx === 50 && sy === 2
+            ? copperRegion
+            : sx === 50 && sy === 3
+              ? ironLode
+              : goldSector
+                ? goldLode
+                : upperGold
+                  ? upperGoldLode
+                  : bossSector
+                    ? bossLocal
+                    : null;
     if (lode) {
         for (let i = slots.length - 1; i >= 0; i--)
             if (nearLode(lode, slots[i].x - originX, slots[i].y - originY)) slots.splice(i, 1);
