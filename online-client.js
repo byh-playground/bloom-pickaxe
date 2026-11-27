@@ -65,6 +65,10 @@ export function createPlayback(delayMs = playbackDelayMs, metrics) {
             display.set(cacheKey, model);
             Object.assign(model, actor);
             const next = second.get(key);
+            // The next buffered packet can already contain a contact between the samples.
+            const blink = next?.hitstopAt <= time && next.hitstopAt > timing.from ? next : actor;
+            model.blinkAt = blink.hitstopAt;
+            model.blinkUntil = blink.hitstopUntil;
             if (
                 next &&
                 actor.spawnRevision === next.spawnRevision &&

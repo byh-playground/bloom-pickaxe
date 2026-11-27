@@ -6,6 +6,16 @@ const turf = { light: '#aac477', deep: '#88ab67', ink: '#425f46' };
 const impactShake = { cut: 0.66, split: 1.65, slam: 1.22, hurt: 2.1 };
 const finisherCameraHoldMs = 95;
 const finisherCameraReturnMs = 160;
+const hitstopBlinkFilter = 'brightness(2.12) saturate(0.45)';
+
+function hitstopBlink(time, actor) {
+    const start = actor.blinkAt ?? actor.hitstopAt;
+    const until = actor.blinkUntil ?? actor.hitstopUntil;
+    const age = time - start;
+    return (
+        age >= 0 && time < until && (age < 36 || (until - start > 100 && age >= 74 && age < 115))
+    );
+}
 function ellipse(ctx, x, y, rx, ry, fill, stroke) {
     ctx.beginPath();
     ctx.ellipse(x, y, rx, ry, 0, 0, TAU);
@@ -571,6 +581,10 @@ export function createFractureView(canvas, touchControls) {
             '#2f45355c',
         );
         ctx.restore();
+        if (o.blink) {
+            ctx.save();
+            ctx.filter = hitstopBlinkFilter;
+        }
         // 옆면(앞쪽만)
         for (const e of edges) {
             if (e.nn.y <= 0.05) continue;
@@ -674,6 +688,7 @@ export function createFractureView(canvas, touchControls) {
             if (e.nn.y <= 0.05) continue;
             line(ctx, [foot[e.i], foot[(e.i + 1) % n]], pal.line, 1.4);
         }
+        if (o.blink) ctx.restore();
         return { rim, cap, c, R };
     }
     // 바위마다 고정된 광맥 위치(원래 크기 기준). 잘려 나간 자리의 광맥은 같이 사라진다.
@@ -971,6 +986,7 @@ export function createFractureView(canvas, touchControls) {
         const color = minerals[ore.id];
         const pal = STONE[ore.id] ?? STONE.plain;
         const time = state.time;
+        const blink = hitstopBlink(time, ore);
         const age = time - (ore.lastHit ?? -Infinity);
         const impactAt = ore.impact?.at ?? 0;
         const recoilTime =
@@ -982,6 +998,7 @@ export function createFractureView(canvas, touchControls) {
         const nearby = Math.hypot(state.player.x - ore.x, state.player.y - ore.y) < 140;
         const anchor = project(ore);
         const distantKey =
+            !blink &&
             !nearby &&
             !ore.boss &&
             ore.geometryRevision === 0 &&
@@ -1014,6 +1031,7 @@ export function createFractureView(canvas, touchControls) {
             H,
             k: rockCapScale,
             palette: pal,
+            blink,
             recoil: bodyRecoil,
             flash: age >= 0 && age < 90 ? (1 - age / 90) ** 2 * 0.4 : 0,
             isCut: (i) => detail.cutEdges[i],
@@ -1059,7 +1077,8 @@ export function createFractureView(canvas, touchControls) {
         const active =
             state.breaking?.target === ore ||
             state.breakingOthers?.some((entry) => entry.target === ore);
-        const stable = !active && !bodyRecoil.x && !bodyRecoil.y && (age < 0 || age >= 90);
+        const stable =
+            !blink && !active && !bodyRecoil.x && !bodyRecoil.y && (age < 0 || age >= 90);
         const body = stable ? cacheBody(ore, anchor, detail, H, options, distantKey) : null;
         if (body && distantKey) {
             drawDistantRock(body, anchor, ore.r);
@@ -1390,6 +1409,7 @@ export function createFractureView(canvas, touchControls) {
             ellipse(ctx, x, y, 22, 9, null, '#fa8c6c');
         }
         ctx.save();
+        if (!dead && hitstopBlink(time, player)) ctx.filter = hitstopBlinkFilter;
         ctx.translate(x + kick.x - side * 5 * fall, y + kick.y + 2 * fall);
         ctx.scale(side, 1);
         ctx.rotate(kick.x * side * 0.018 - fall * 1.48);

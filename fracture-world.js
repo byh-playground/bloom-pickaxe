@@ -787,6 +787,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
     function holdMiningContact(session, target, durationMs) {
         const holdUntil = state.time + durationMs;
         const oldDeadline = Math.max(state.time, target.hitstopUntil ?? state.time);
+        if (oldDeadline === state.time) target.hitstopAt = state.time;
         target.stageUntil += Math.max(0, holdUntil - oldDeadline);
         target.hitstopUntil = Math.max(oldDeadline, holdUntil);
         if (!(session.player.hitstopUntil > state.time)) session.player.hitstopAt = state.time;
@@ -1346,6 +1347,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             angle,
             boss,
             impact,
+            hitstopAt,
             hitstopUntil,
             stage,
             chargeDir,
@@ -1365,6 +1367,7 @@ export function createFractureWorld(Rapier, seed = 17, { online = false } = {}) 
             angle,
             boss,
             impact,
+            hitstopAt,
             hitstopUntil,
             stage,
             chargeDir,
