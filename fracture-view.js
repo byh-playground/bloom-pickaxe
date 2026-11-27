@@ -725,11 +725,12 @@ export function createFractureView(canvas, touchControls) {
         viewportDirty = false;
     }
 
+    function canvasDpr() {
+        return Math.max(0.75, Math.min(2, devicePixelRatio || 1) * backingScales[qualityLevel]);
+    }
+
     function measure(state) {
-        const dpr = Math.max(
-            0.75,
-            Math.min(2, devicePixelRatio || 1) * backingScales[qualityLevel],
-        );
+        const dpr = canvasDpr();
         if (viewportDirty || viewport?.dpr !== dpr) measureViewport(dpr);
         const { w, h, turned, worldW, worldH, top, availableH, scale: baseScale } = viewport;
         const bounds = state.bounds ?? board;
@@ -2790,6 +2791,13 @@ export function createFractureView(canvas, touchControls) {
             if (isVisible(project(m), 160)) effect(m, state.time);
         }
     }
+    // Allocate and touch the real backing surface before network playback starts.
+    const initialDpr = canvasDpr();
+    measureViewport(initialDpr);
+    mainContext.setTransform(initialDpr, 0, 0, initialDpr, 1, 1);
+    mainContext.fillStyle = '#2d4a37';
+    mainContext.fillRect(0, 0, 1, 1);
+
     return {
         draw,
         renderScale: () => backingScales[qualityLevel],
